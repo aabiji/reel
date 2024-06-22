@@ -4,7 +4,6 @@ I watch *a lot* of videos, so how does video playback work?
 [This is a nice guide](http://dranger.com/ffmpeg/tutorial01.html)
 
 TODO:
-- build a small demo using ffmpeg to open container, read and decode frames
 - build a small ui using SDL to show a single image
 - Use debugger to trace the code execution path
 

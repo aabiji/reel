@@ -1,11 +1,13 @@
 #include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/imgutils.h>
 
 static enum AVPixelFormat hw_pixel_format;
-
 enum AVPixelFormat get_hw_pixel_format(AVCodecContext* ctx, const enum AVPixelFormat* formats) {
     const enum AVPixelFormat* format;
     for (format = formats; *format != AV_PIX_FMT_NONE; format++) {
@@ -17,18 +19,76 @@ enum AVPixelFormat get_hw_pixel_format(AVCodecContext* ctx, const enum AVPixelFo
     return AV_PIX_FMT_NONE;
 }
 
+int decode(AVCodecContext* ctx, const AVPacket* packet) {
+    AVFrame* hw_frame = NULL;
+    AVFrame* sw_frame = NULL;
+    AVFrame* frame = NULL;
+
+    int buffer_size;
+    uint8_t* buffer;
+
+    int ret = 0;
+    if ((ret = avcodec_send_packet(ctx, packet)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
+        return ret;
+    }
+
+    while (true) {
+        hw_frame = av_frame_alloc();
+        sw_frame = av_frame_alloc();
+
+        ret = avcodec_receive_frame(ctx, hw_frame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR(EOF)) {
+            // At the end of packet or we need to send new input
+            av_frame_free(&hw_frame);
+            av_frame_free(&sw_frame);
+            return 0;
+        } else if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
+            goto error;
+        }
+
+        if (hw_frame->format == hw_pixel_format) { // GPU decoded frame
+            if ((ret = av_hwframe_transfer_data(sw_frame, hw_frame, 0)) < 0) {
+                av_log(NULL, AV_LOG_ERROR, "Couldn't send frame from the GPU to the CPU\n");
+                goto error;
+            }
+            frame = sw_frame;
+        } else { // CPU decoded frame
+            frame = hw_frame;
+        }
+
+        buffer_size = av_image_get_buffer_size(frame->format, frame->width, frame->height, 1);
+        buffer = malloc(buffer_size);
+        ret = av_image_copy_to_buffer(buffer, buffer_size,
+                                     (const uint8_t* const*)frame->data, (const int*)frame->linesize,
+                                     frame->format, frame->width, frame->height, 1);
+        if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "Couldn't copy frame");
+            goto error;
+        }
+
+        error:
+            av_frame_free(&hw_frame);
+            av_frame_free(&sw_frame);
+            free(buffer);
+            if (ret < 0) return ret;
+    }
+
+    return ret;
+}
+
 int main() {
+    const char* file = "/home/aabiji/Videos/rat.webm";
+
     AVFormatContext* format_ctx = NULL;
     AVCodecContext* decoder_ctx;
     AVBufferRef* hw_device_ctx = NULL;
 
     const AVCodec* codec;
-    int video_stream_index;
-    int ret;
+    int video_stream_index; // Number indicating that a packet is a video packet
+    int ret = 0;
 
-    av_log_set_level(AV_LOG_PANIC);
-
-    const char* file = "/home/aabiji/Videos/rat.webm";
     if ((ret = avformat_open_input(&format_ctx, file, NULL, NULL)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Couldn't open input file\n");
         return ret;
@@ -81,6 +141,17 @@ int main() {
         return ret;
     }
 
+    AVPacket* packet = av_packet_alloc();
+    while (ret >= 0) {
+        if ((ret = av_read_frame(format_ctx, packet)) < 0)
+            break;
+
+        if (packet->stream_index == video_stream_index)
+            ret = decode(decoder_ctx, packet);
+        av_packet_unref(packet);
+   }
+
+    av_packet_free(&packet);
     av_buffer_unref(&hw_device_ctx);
     avcodec_free_context(&decoder_ctx);
     avformat_close_input(&format_ctx);
