@@ -1,6 +1,6 @@
 
 compile_flags = -Wall -Werror -Wextra -Wno-unused -g
-linker_flags = -lavformat -lavcodec -lavutil -lavfilter
+linker_flags = -lavformat -lavcodec -lavutil -lavfilter -lswscale -lSDL2
 outdir = bin
 output = showtime
 files = src/main.c

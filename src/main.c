@@ -6,6 +6,9 @@
 #include <libavformat/avformat.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
+#include <libswscale/swscale.h>
+
+#include <SDL2/SDL.h>
 
 static enum AVPixelFormat hw_pixel_format;
 enum AVPixelFormat get_hw_pixel_format(AVCodecContext* ctx, const enum AVPixelFormat* formats) {
@@ -19,10 +22,29 @@ enum AVPixelFormat get_hw_pixel_format(AVCodecContext* ctx, const enum AVPixelFo
     return AV_PIX_FMT_NONE;
 }
 
-int decode(AVCodecContext* ctx, const AVPacket* packet) {
+// Resize the frame to (w, h)
+// Convert the frame's pixel format to fmt
+AVFrame* convert_frame(AVFrame* src, enum AVPixelFormat fmt, int w, int h) {
+    AVFrame* dst = av_frame_alloc();
+    av_image_alloc(dst->data, dst->linesize, w, h, fmt, 1);
+    dst->width = w;
+    dst->height = h;
+    dst->format = fmt;
+
+    struct SwsContext* converter = sws_getContext(src->width, src->height, src->format,
+                                                  w, h, fmt, SWS_BILINEAR, NULL, NULL, NULL);
+    sws_scale(converter, (const uint8_t* const*)src->data, src->linesize, 0,
+              src->height, (uint8_t* const*)dst->data, dst->linesize);
+    sws_freeContext(converter);
+
+    return dst;
+}
+
+int decode(AVCodecContext* ctx, const AVPacket* packet, SDL_Renderer* renderer) {
     AVFrame* hw_frame = NULL;
     AVFrame* sw_frame = NULL;
     AVFrame* frame = NULL;
+    AVFrame* rgba_frame = NULL;
 
     int buffer_size;
     uint8_t* buffer;
@@ -32,6 +54,13 @@ int decode(AVCodecContext* ctx, const AVPacket* packet) {
         av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
         return ret;
     }
+
+    int w = 500, h = 500;
+    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                                             SDL_TEXTUREACCESS_STREAMING, w, h);
+    void* texture_pixels;
+    SDL_Rect texture_rect = {.x = 0, .y = 0, .w = w, .h = h};
+    int pixel_pitch = w * 3;
 
     while (true) {
         hw_frame = av_frame_alloc();
@@ -58,23 +87,34 @@ int decode(AVCodecContext* ctx, const AVPacket* packet) {
             frame = hw_frame;
         }
 
-        buffer_size = av_image_get_buffer_size(frame->format, frame->width, frame->height, 1);
+        AVFrame* rgba_frame = convert_frame(frame, AV_PIX_FMT_RGB24, w, h);
+        int buffer_size = av_image_get_buffer_size(rgba_frame->format, w, h, 1);
         buffer = malloc(buffer_size);
         ret = av_image_copy_to_buffer(buffer, buffer_size,
-                                     (const uint8_t* const*)frame->data, (const int*)frame->linesize,
-                                     frame->format, frame->width, frame->height, 1);
+                                      (const uint8_t* const*)rgba_frame->data, (const int*)rgba_frame->linesize,
+                                      AV_PIX_FMT_RGB24, w, h, 1);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Couldn't copy frame");
             goto error;
         }
+        SDL_LockTexture(texture, NULL, &texture_pixels, &pixel_pitch);
+        memcpy(texture_pixels, buffer, buffer_size);
+        SDL_UnlockTexture(texture);
+        SDL_RenderCopy(renderer, texture, NULL, &texture_rect);
+        SDL_RenderPresent(renderer);
 
         error:
             av_frame_free(&hw_frame);
             av_frame_free(&sw_frame);
+            av_frame_free(&rgba_frame);
             free(buffer);
-            if (ret < 0) return ret;
+            if (ret < 0) {
+                SDL_DestroyTexture(texture);
+                return ret;
+            }
     }
 
+    SDL_DestroyTexture(texture);
     return ret;
 }
 
@@ -141,15 +181,33 @@ int main() {
         return ret;
     }
 
+    SDL_Init(SDL_INIT_EVERYTHING);
+    const int size = 500;
+    SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                           size, size, SDL_WINDOW_SHOWN);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_Event event;
+    bool closed = false;
+
     AVPacket* packet = av_packet_alloc();
-    while (ret >= 0) {
+    while (!closed) {
+        SDL_RenderClear(renderer);
+
         if ((ret = av_read_frame(format_ctx, packet)) < 0)
             break;
-
         if (packet->stream_index == video_stream_index)
-            ret = decode(decoder_ctx, packet);
+            ret = decode(decoder_ctx, packet, renderer);
         av_packet_unref(packet);
+
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT)
+                closed = true;
+        }
    }
+
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
 
     av_packet_free(&packet);
     av_buffer_unref(&hw_device_ctx);
