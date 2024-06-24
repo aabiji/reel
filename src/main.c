@@ -13,6 +13,9 @@
 typedef enum AVPixelFormat PixFmt;
 static PixFmt hw_pixel_format;
 
+static const int sdl_pix_fmt = SDL_PIXELFORMAT_RGBA8888;
+static const PixFmt ff_pix_fmt = AV_PIX_FMT_ABGR;
+
 // Resize the frame and change the frame's pixel format
 AVFrame* convert_frame(AVFrame* src, PixFmt fmt, int w, int h) {
     AVFrame* dst = av_frame_alloc();
@@ -130,7 +133,7 @@ typedef struct {
 
 Renderer new_renderer(SDL_Window* window, int w, int h, int fps) {
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    SDL_Texture* texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+    SDL_Texture* texture = SDL_CreateTexture(renderer, sdl_pix_fmt,
                                              SDL_TEXTUREACCESS_STREAMING, w, h);
     Renderer r = {
         .renderer = renderer,
@@ -145,6 +148,14 @@ Renderer new_renderer(SDL_Window* window, int w, int h, int fps) {
 void free_renderer(Renderer* r) {
     SDL_DestroyTexture(r->texture);
     SDL_DestroyRenderer(r->renderer);
+}
+
+void resize_renderer(Renderer* r, int w, int h) {
+    r->width = w;
+    r->height = h;
+    SDL_DestroyTexture(r->texture);
+    r->texture = SDL_CreateTexture(r->renderer, sdl_pix_fmt,
+                                   SDL_TEXTUREACCESS_STREAMING, w, h);
 }
 
 // Callback function to do something (rendering) with the frame data
@@ -170,7 +181,7 @@ void frame_handler(void* data, uint8_t* pixels, int num_bytes) {
 
 int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
                        void* handler_data, FrameHandler handler,
-                       int new_width, int new_height) {
+                       int w, int h) {
     AVFrame* hw_frame  = NULL;
     AVFrame* sw_frame  = NULL;
     AVFrame* frame     = NULL;
@@ -210,16 +221,14 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
             frame = hw_frame;
         }
 
-        AVFrame* rgb_frame = convert_frame(frame, AV_PIX_FMT_RGB24,
-                                           new_width, new_height);
-        int buffer_size = av_image_get_buffer_size(rgb_frame->format,
-                                                   new_width, new_height, 1);
-        buffer = malloc(buffer_size);
-        ret = av_image_copy_to_buffer(buffer, buffer_size,
+        AVFrame* rgb_frame = convert_frame(frame, ff_pix_fmt, w, h);
+        int size = av_image_get_buffer_size(rgb_frame->format, w, h, 1);
+        buffer = malloc(size);
+        ret = av_image_copy_to_buffer(buffer, size,
                                       (const uint8_t* const*)rgb_frame->data,
                                       (const int*)rgb_frame->linesize,
-                                      AV_PIX_FMT_RGB24, new_width, new_height, 1);
-        handler(handler_data, buffer, buffer_size);
+                                      rgb_frame->format, w, h, 1);
+        handler(handler_data, buffer, size);
 
         error:
             av_frame_free(&hw_frame);
@@ -256,27 +265,33 @@ int main() {
     AVPacket* packet = av_packet_alloc();
 
     SDL_Init(SDL_INIT_EVERYTHING);
-    const int width = 700;
-    const int height = 500;
     SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED, width, height,
-                                          SDL_WINDOW_SHOWN);
-    Renderer renderer = new_renderer(window, width, height, fps);
+                                          SDL_WINDOWPOS_CENTERED, 700, 500,
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+    Renderer renderer = new_renderer(window, 700, 500, fps);
     SDL_Event event;
     bool closed = false;
 
     while (!closed) {
-        if ((ret = av_read_frame(format_ctx, packet)) < 0)
-            break;
-        if (packet->stream_index == video_decoder.stream_index)
-            ret = decode_video_frame(video_decoder.ctx, packet,
-                                     (void*)&renderer, frame_handler,
-                                     renderer.width, renderer.height);
+        ret = av_read_frame(format_ctx, packet);
+        if (ret >= 0) {
+            if (packet->stream_index == video_decoder.stream_index)
+                ret = decode_video_frame(video_decoder.ctx, packet,
+                                        (void*)&renderer, frame_handler,
+                                        renderer.width, renderer.height);
+        }
         av_packet_unref(packet);
 
         while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT)
+            if (event.type == SDL_QUIT) {
                 closed = true;
+                break;
+            }
+
+            if (event.type == SDL_WINDOWEVENT &&
+                event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                resize_renderer(&renderer, event.window.data1, event.window.data2);
+            }
         }
    }
 

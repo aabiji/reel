@@ -10,9 +10,11 @@ sudo apt install ffmpeg libsdl2-dev libsdl2-mixer-dev
 
 TODO:
 - refactor
-- play video
+- play audio
 - Use debugger to trace the code execution path
 - Sync audio to video
+- implement some sort of frame scheduling. right now we're just rendering
+  as many frames as possible, but we need a way to control that
 
 Sub projects:
 - Renderer (OpenGL?)
