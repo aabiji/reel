@@ -5,12 +5,16 @@ I watch *a lot* of videos, so how does video playback work?
 
 Setup:
 ```
-sudo apt install ffmpeg libsdl2-dev libsdl2-mixer-dev
+sudo apt install ffmpeg libsdl2-dev
 ```
 
-TODO:
-- refactor
-- play audio
+TODO -> audio playback:
+- see if there are hardware devices for decoding audio
+- Read stackoverflow audio explainers
+- read encode_audio.c and understand what's going on
+- implement a decode_audio_sample function
+- play audio using sdl2 audiostream
+- ???
 - Use debugger to trace the code execution path
 - Sync audio to video
 - implement some sort of frame scheduling. right now we're just rendering
