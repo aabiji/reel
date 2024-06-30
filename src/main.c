@@ -60,8 +60,6 @@ void free_decoder(Decoder* decoder) {
     avcodec_free_context(&decoder->ctx);
 }
 
-// TODO: experiment and see if we can use hardware acceleration for audio
-//       or is it just really just video only?
 void find_hardware_device(Decoder* decoder) {
     enum AVHWDeviceType device_type = av_hwdevice_iterate_types(AV_HWDEVICE_TYPE_NONE);
 
@@ -183,7 +181,6 @@ void frame_handler(void* data, uint8_t* pixels, int num_bytes) {
     SDL_RenderPresent(r->renderer);
 }
 
-// This would also work for audio frames, not just video frames (they're both frames)
 int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
                        void* handler_data, FrameHandler handler,
                        int w, int h) {
@@ -191,8 +188,6 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
     AVFrame* sw_frame  = NULL;
     AVFrame* frame     = NULL;
     AVFrame* rgb_frame = NULL;
-
-    int buffer_size;
     uint8_t* buffer;
 
     int ret = 0;
@@ -231,9 +226,10 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
         int size = av_image_get_buffer_size(rgb_frame->format, w, h, 1);
         buffer = malloc(size);
         ret = av_image_copy_to_buffer(buffer, size,
-                                      (const uint8_t* const*)rgb_frame->data,
-                                      (const int*)rgb_frame->linesize,
-                                      rgb_frame->format, w, h, 1);
+                                        (const uint8_t* const*)rgb_frame->data,
+                                        (const int*)rgb_frame->linesize,
+                                        rgb_frame->format, w, h, 1);
+        if (ret < 0) goto error;
         handler(handler_data, buffer, size);
 
         error:
@@ -245,6 +241,88 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
     }
 
     return ret;
+}
+
+// Circular queue
+typedef struct {
+    AVFrame** frames;
+    int index;
+    int length;
+} AudioQueue;
+
+AudioQueue new_audio_queue(int length) {
+    AudioQueue queue = {
+        .index = 0,
+        .length = length,
+        .frames = malloc(sizeof(AVFrame) * length),
+    };
+    return queue;
+}
+
+void free_audio_queue(AudioQueue* queue) {
+    free(queue->frames);
+}
+
+int decode_audio_frame(AVCodecContext* ctx, AVPacket* packet, AudioQueue* queue) {
+    AVFrame* frame = NULL;
+    int ret = 0;
+
+    if ((ret = avcodec_send_packet(ctx, packet)) < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
+        return ret;
+    }
+
+    while (true) {
+        frame = av_frame_alloc();
+        ret = avcodec_receive_frame(ctx, frame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR(EOF)) {
+            // At the end of packet or we need to send new input
+            av_frame_free(&frame);
+            return 0;
+        } else if (ret < 0) {
+            av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
+            av_frame_free(&frame);
+            return ret;
+        }
+
+        queue->frames[queue->index++] = frame;
+        if (queue->index >= queue->length)
+            queue->index = 0;
+    }
+
+    return ret;
+}
+
+// Map ffmpeg audio format to sdl audio format
+// TODO: handle planar format properly. planar audio samples
+// are not interleaved, each channel is its own array
+uint16_t map_audio_format(enum AVSampleFormat format) {
+    switch (format) {
+        case AV_SAMPLE_FMT_U8:
+        case AV_SAMPLE_FMT_U8P:
+            return AUDIO_U8;
+
+        case AV_SAMPLE_FMT_S16:
+        case AV_SAMPLE_FMT_S16P:
+            return AUDIO_S16;
+
+        case AV_SAMPLE_FMT_S32:
+        case AV_SAMPLE_FMT_S32P:
+            return AUDIO_S32;
+
+        case AV_SAMPLE_FMT_FLTP:
+        case AV_SAMPLE_FMT_FLT:
+            return AUDIO_F32;
+
+        default:
+            return AUDIO_S16;
+    }
+    return AUDIO_S16;
+}
+
+void sdl_audio_callback(void* user_data, uint8_t* buffer, int length) {
+    AudioQueue* queue = (AudioQueue*)user_data;
+    // TODO: implement me!
 }
 
 int main() {
@@ -268,7 +346,6 @@ int main() {
         return ret;
     }
     int fps = av_q2d(format_ctx->streams[video_decoder.stream_index]->r_frame_rate);
-    AVPacket* packet = av_packet_alloc();
 
     SDL_Init(SDL_INIT_EVERYTHING);
     SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED,
@@ -278,6 +355,21 @@ int main() {
     SDL_Event event;
     bool closed = false;
 
+    Decoder audio_decoder = new_decoder(AVMEDIA_TYPE_AUDIO);
+    AudioQueue audio_queue = new_audio_queue(100);
+    init_decoder(format_ctx, &audio_decoder);
+
+    SDL_AudioSpec spec = {};
+    SDL_AudioSpec wanted_spec = {};
+    wanted_spec.freq = audio_decoder.ctx->sample_rate;
+    wanted_spec.channels = audio_decoder.ctx->ch_layout.nb_channels;
+    wanted_spec.callback = sdl_audio_callback;
+    wanted_spec.userdata = (void*)&audio_queue;
+    wanted_spec.samples = 4096;
+    wanted_spec.format = map_audio_format(audio_decoder.ctx->sample_fmt);
+    SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, 0);
+
+    AVPacket* packet = av_packet_alloc();
     while (!closed) {
         ret = av_read_frame(format_ctx, packet);
         if (ret >= 0) {
@@ -285,6 +377,8 @@ int main() {
                 ret = decode_video_frame(video_decoder.ctx, packet,
                                         (void*)&renderer, frame_handler,
                                         renderer.width, renderer.height);
+            } else if (packet->stream_index == audio_decoder.stream_index) {
+                ret = decode_audio_frame(audio_decoder.ctx, packet, &audio_queue);
             }
         }
         av_packet_unref(packet);
@@ -302,12 +396,16 @@ int main() {
         }
    }
 
-    free_renderer(&renderer);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-
+    free_audio_queue(&audio_queue);
+    free_decoder(&audio_decoder);
     free_decoder(&video_decoder);
+    free_renderer(&renderer);
+
     av_packet_free(&packet);
     avformat_close_input(&format_ctx);
+
+    SDL_CloseAudioDevice(device_id);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
 }

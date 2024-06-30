@@ -9,7 +9,7 @@ sudo apt install ffmpeg libsdl2-dev
 ```
 
 TODO -> audio playback:
-- see if there are hardware devices for decoding audio
+- see if there are hardware devices for decoding audio -- there are none
 - Read stackoverflow audio explainers
 - read encode_audio.c and understand what's going on
 - implement a decode_audio_sample function
