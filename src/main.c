@@ -299,31 +299,29 @@ int decode_audio_frame(AVCodecContext* ctx, AVPacket* packet, AudioQueue* queue)
     return ret;
 }
 
-// Map ffmpeg audio format to sdl audio format
-// TODO: handle planar format properly. planar audio samples
-// are not interleaved, each channel is its own array
-uint16_t map_audio_format(enum AVSampleFormat format) {
-    switch (format) {
-        case AV_SAMPLE_FMT_U8:
-        case AV_SAMPLE_FMT_U8P:
-            return AUDIO_U8;
-
-        case AV_SAMPLE_FMT_S16:
-        case AV_SAMPLE_FMT_S16P:
-            return AUDIO_S16;
-
-        case AV_SAMPLE_FMT_S32:
-        case AV_SAMPLE_FMT_S32P:
-            return AUDIO_S32;
-
-        case AV_SAMPLE_FMT_FLTP:
-        case AV_SAMPLE_FMT_FLT:
-            return AUDIO_F32;
-
-        default:
-            return AUDIO_S16;
+// Interleave the audio samples for each channel if the audio is planar
+int interleave_planar_audio(AVFrame* frame, uint8_t** buffer) {
+    bool planar = av_sample_fmt_is_planar(frame->format);
+    if (!planar) {
+        memcpy(buffer, frame->data[0], frame->linesize[0]);
+        return frame->linesize[0];
     }
-    return AUDIO_S16;
+
+    int samples = frame->nb_samples;
+    int channels = frame->ch_layout.nb_channels;
+    int sample_size = av_get_bytes_per_sample(frame->format);
+    int buffer_size = channels * samples * sample_size;
+    *buffer = malloc(buffer_size);
+
+    for (int i = 0; i < samples; i++) {
+        for (int j = 0; j < channels; j++) {
+            int data_offset = i * sample_size;
+            int buffer_offset = (i * channels + j) * sample_size;
+            memcpy(*buffer + buffer_offset, frame->data[j] + data_offset, sample_size);
+        }
+    }
+
+    return buffer_size;
 }
 
 void sdl_audio_callback(void* user_data, uint8_t* buffer, int length) {
@@ -353,30 +351,53 @@ void sdl_audio_callback(void* user_data, uint8_t* buffer, int length) {
             break;
         }
 
+        uint8_t* sample_data;
         AVFrame* frame = queue->frames[queue->read_index];
-        int sample_size = av_get_bytes_per_sample(frame->format);
+        int data_size = interleave_planar_audio(frame, &sample_data);
+        int size = remaining > data_size ? data_size : remaining;
+        memcpy(buffer, sample_data, size);
+        remaining -= size;
+        buffer += size;
 
-        // Feed frame data into buffer
-        for (int i = 0; i < frame->ch_layout.nb_channels; i++) {
-            int frame_size = sample_size * frame->nb_samples;
-            int size = remaining > frame_size ? frame_size : remaining;
-            memcpy(buffer, frame->data[i], size);
-            remaining -= size;
-            buffer += size;
-
-            // Deallocate the frames we don't need anymore
-            if (remaining == 0) {
-                int j = prev_index;
-                while (j < queue->read_index) {
-                    av_frame_free(&queue->frames[j]);
-                    j = (j + 1) % queue->length;
-                }
-                break;
+        // Deallocate the frames we don't need anymore
+        if (remaining == 0) {
+            int i = prev_index;
+            while (i < queue->read_index) {
+                av_frame_free(&queue->frames[i]);
+                i = (i + 1) % queue->length;
             }
         }
 
+        free(sample_data);
         queue->read_index = (queue->read_index + 1) % queue->length;
     }
+}
+
+// Map ffmpeg audio format to sdl audio format
+// TODO: handle planar format properly. planar audio samples
+// are not interleaved, each channel is its own array
+uint16_t map_audio_format(enum AVSampleFormat format) {
+    switch (format) {
+        case AV_SAMPLE_FMT_U8:
+        case AV_SAMPLE_FMT_U8P:
+            return AUDIO_U8;
+
+        case AV_SAMPLE_FMT_S16:
+        case AV_SAMPLE_FMT_S16P:
+            return AUDIO_S16;
+
+        case AV_SAMPLE_FMT_S32:
+        case AV_SAMPLE_FMT_S32P:
+            return AUDIO_S32;
+
+        case AV_SAMPLE_FMT_FLTP:
+        case AV_SAMPLE_FMT_FLT:
+            return AUDIO_F32;
+
+        default:
+            return AUDIO_S16;
+    }
+    return AUDIO_S16;
 }
 
 int main() {
