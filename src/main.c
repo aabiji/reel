@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <pthread.h> // TODO: add mutic to AudioQueue
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -18,7 +19,7 @@ static const PixFmt ff_pix_fmt = AV_PIX_FMT_ABGR;
 
 // Resize the frame and change the frame's pixel format
 // TODO: make this faster
-AVFrame* convert_frame(AVFrame* src, PixFmt fmt, int w, int h) {
+AVFrame* convert_video_frame(AVFrame* src, PixFmt fmt, int w, int h) {
     AVFrame* dst = av_frame_alloc();
     av_image_alloc(dst->data, dst->linesize, w, h, fmt, 1);
     dst->width = w;
@@ -222,7 +223,7 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
             frame = hw_frame;
         }
 
-        AVFrame* rgb_frame = convert_frame(frame, ff_pix_fmt, w, h);
+        AVFrame* rgb_frame = convert_video_frame(frame, ff_pix_fmt, w, h);
         int size = av_image_get_buffer_size(rgb_frame->format, w, h, 1);
         buffer = malloc(size);
         ret = av_image_copy_to_buffer(buffer, size,
@@ -245,22 +246,28 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
 
 // Circular queue
 typedef struct {
-    AVFrame** frames;
-    int index;
     int length;
+    int write_index;
+    int read_index;
+    AVFrame** frames;
+    pthread_mutex_t mutex;
 } AudioQueue;
 
 AudioQueue new_audio_queue(int length) {
     AudioQueue queue = {
-        .index = 0,
+        .write_index = 0,
+        .read_index = 0,
         .length = length,
-        .frames = malloc(sizeof(AVFrame) * length),
+        .frames = malloc(sizeof(AVFrame*) * length),
+        .mutex = {},
     };
+    pthread_mutex_init(&queue.mutex, NULL);
     return queue;
 }
 
 void free_audio_queue(AudioQueue* queue) {
     free(queue->frames);
+    pthread_mutex_destroy(&queue->mutex);
 }
 
 int decode_audio_frame(AVCodecContext* ctx, AVPacket* packet, AudioQueue* queue) {
@@ -285,9 +292,8 @@ int decode_audio_frame(AVCodecContext* ctx, AVPacket* packet, AudioQueue* queue)
             return ret;
         }
 
-        queue->frames[queue->index++] = frame;
-        if (queue->index >= queue->length)
-            queue->index = 0;
+        queue->frames[queue->write_index] = frame;
+        queue->write_index = (queue->write_index + 1) % queue->length;
     }
 
     return ret;
@@ -322,12 +328,60 @@ uint16_t map_audio_format(enum AVSampleFormat format) {
 
 void sdl_audio_callback(void* user_data, uint8_t* buffer, int length) {
     AudioQueue* queue = (AudioQueue*)user_data;
-    // TODO: implement me!
+
+    // Haven't gotten any frames yet, so be silent
+    if (queue->write_index == 0) {
+        memset(buffer, 0, length);
+        return;
+    }
+
+    // TODO: put a lock here
+    // TODO: maybe sdl doesn't support planar audio
+    // TODO: sdl expects interleaved audio, not planar audio,
+    //       so we need to convert our planar audio to interleaved audio
+
+    int remaining = length;
+    uint8_t* start = buffer;
+
+    int prev_index = queue->read_index;
+    while (remaining > 0) {
+        if (queue->read_index == queue->write_index) {
+            // We don't have enough frames to fill the buffer, so rewind
+            // and fill buffer with silence
+            queue->read_index = prev_index;
+            memset(start, 0, length);
+            break;
+        }
+
+        AVFrame* frame = queue->frames[queue->read_index];
+        int sample_size = av_get_bytes_per_sample(frame->format);
+
+        // Feed frame data into buffer
+        for (int i = 0; i < frame->ch_layout.nb_channels; i++) {
+            int frame_size = sample_size * frame->nb_samples;
+            int size = remaining > frame_size ? frame_size : remaining;
+            memcpy(buffer, frame->data[i], size);
+            remaining -= size;
+            buffer += size;
+
+            // Deallocate the frames we don't need anymore
+            if (remaining == 0) {
+                int j = prev_index;
+                while (j < queue->read_index) {
+                    av_frame_free(&queue->frames[j]);
+                    j = (j + 1) % queue->length;
+                }
+                break;
+            }
+        }
+
+        queue->read_index = (queue->read_index + 1) % queue->length;
+    }
 }
 
 int main() {
-    const char* file = "/home/aabiji/Videos/rat.webm";
-    //const char* file = "/home/aabiji/Videos/10 rounds Bring sally up [TsWOIaYUBf4].webm";
+    const char* file = "/home/aabiji/Videos/test.webm";
+    //const char* file = "/home/aabiji/Videos/test_stereo.mp4";
     AVFormatContext* format_ctx = NULL;
 
     int ret = 0;
@@ -366,8 +420,11 @@ int main() {
     wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = (void*)&audio_queue;
     wanted_spec.samples = 4096;
+    wanted_spec.silence = 0;
     wanted_spec.format = map_audio_format(audio_decoder.ctx->sample_fmt);
-    SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, 0);
+    SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, SDL_AUDIO_ALLOW_ANY_CHANGE);
+
+    SDL_PauseAudioDevice(device_id, 0);
 
     AVPacket* packet = av_packet_alloc();
     while (!closed) {
