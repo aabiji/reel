@@ -8,9 +8,8 @@ Setup:
 sudo apt install ffmpeg libsdl2-dev
 ```
 
-TODO -> audio playback:
+- Split video and audio playback into separate threads
 - see if there are hardware devices for decoding audio -- there are but I'll need to revisit that topic
-- Fix the audio playback choppiness and reverb
 - Refactor -- split into mutliple files, use c++, comment
 - Use debugger to trace the code execution path
 - Sync audio to video
