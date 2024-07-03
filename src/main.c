@@ -246,11 +246,18 @@ int decode_video_frame(AVCodecContext* ctx, AVPacket* packet,
 
 // Circular queue
 typedef struct {
-    int length;
     int read_index; // catches up to the write_index
     int write_index;
+
+    int length;
     AVPacket** packets;
+    bool have_packets;
+
+    pthread_cond_t condition; // signals when we need more packets
     pthread_mutex_t mutex;
+
+    uint8_t* leftover_samples;
+    int leftover_size;
 } AudioQueue;
 Decoder audio_decoder;
 
@@ -259,22 +266,30 @@ AudioQueue new_audio_queue(int length) {
         .write_index = 0,
         .read_index = 0,
         .length = length,
+        .have_packets = false,
         .packets = malloc(sizeof(AVFrame*) * length),
-        .mutex = {},
+        .leftover_samples = NULL,
+        .leftover_size = 0,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .condition = PTHREAD_COND_INITIALIZER,
     };
     pthread_mutex_init(&queue.mutex, NULL);
+    pthread_cond_init(&queue.condition, NULL);
     return queue;
 }
 
 void free_audio_queue(AudioQueue* queue) {
     free(queue->packets);
+    pthread_cond_destroy(&queue->condition);
     pthread_mutex_destroy(&queue->mutex);
 }
 
 void queue_audio_packet(AudioQueue* queue, AVPacket* packet) {
     pthread_mutex_lock(&queue->mutex);
+    queue->have_packets = true;
     queue->packets[queue->write_index] = packet;
     queue->write_index = (queue->write_index + 1) % queue->length;
+    pthread_cond_signal(&queue->condition); // Signal that we did receive a packet
     pthread_mutex_unlock(&queue->mutex);
 }
 
@@ -327,53 +342,76 @@ int decode_audio_frame(AVCodecContext* ctx, AVPacket* packet, uint8_t** buffer, 
         }
 
         *buffer_size += interleave_planar_audio(frame, buffer);
+        av_frame_free(&frame);
     }
 
     return ret;
 }
 
 void sdl_audio_callback(void* user_data, uint8_t* buffer, int length) {
+    int remaining = length;
     AudioQueue* queue = (AudioQueue*)user_data;
-    //pthread_mutex_lock(&queue->mutex);
+    pthread_mutex_lock(&queue->mutex);
+    memset(buffer, 0, length);
 
-    // Haven't gotten any frames yet, so be silent
-    if (queue->write_index == 0) {
-        memset(buffer, 0, length);
+    // Haven't gotten any frames yet, so output silence
+    if (!queue->have_packets) {
+        pthread_mutex_unlock(&queue->mutex);
         return;
     }
 
-    int remaining = length;
+    // First add any samples we have left over
+    if (queue->leftover_size > 0) {
+        int size = remaining > queue->leftover_size ? queue->leftover_size : remaining;
+        memcpy(buffer, queue->leftover_samples, size);
+        remaining -= size;
+        buffer += size;
+
+        if (size < queue->leftover_size) {
+            // Shift the remaining data down
+            memmove(queue->leftover_samples, queue->leftover_samples + size, queue->leftover_size - size);
+            queue->leftover_size -= size;
+        } else {
+            free(queue->leftover_samples);
+            queue->leftover_samples = NULL;
+            queue->leftover_size = 0;
+        }
+    }
+
     while (remaining > 0) {
-        // Pad the rest of the buffer with silence, if we don't
-        // have enough samples to fill it
+        // If we don't have any more packets, just wait until we get more
         if (queue->read_index == queue->write_index) {
-            memset(buffer, 0, remaining);
+            pthread_cond_wait(&queue->condition, &queue->mutex);
             break;
         }
-        AVPacket* packet = queue->packets[queue->read_index];
 
         uint8_t* audio_samples;
         int amount_decoded = 0;
+        AVPacket* packet = queue->packets[queue->read_index];
         decode_audio_frame(audio_decoder.ctx, packet, &audio_samples, &amount_decoded);
+
         int size = remaining > amount_decoded ? amount_decoded : remaining;
-
-        // TODO: handle partial frames!
-        if (amount_decoded - size > 0) {
-            printf("Remainder: %d\n", amount_decoded - size);
-        } else {
-            printf("No remainder\n");
-        }
-
         memcpy(buffer, audio_samples, size);
         remaining -= size;
         buffer += size;
+
+        // Cache left over samples
+        int amount_left_over = amount_decoded - size;
+        if (amount_left_over > 0) {
+            int new_size = queue->leftover_size + amount_left_over;
+            queue->leftover_samples = realloc(queue->leftover_samples, new_size);
+
+            uint8_t* ptr = queue->leftover_samples + queue->leftover_size;
+            memcpy(ptr, audio_samples + size, amount_left_over);
+            queue->leftover_size = new_size;
+        }
 
         free(audio_samples);
         av_packet_free(&queue->packets[queue->read_index]);
         queue->read_index = (queue->read_index + 1) % queue->length;
     }
 
-    //pthread_mutex_unlock(&queue->mutex);
+    pthread_mutex_unlock(&queue->mutex);
 }
 
 // Map ffmpeg audio format to sdl audio format
@@ -404,8 +442,7 @@ uint16_t map_audio_format(enum AVSampleFormat format) {
 }
 
 int main() {
-    const char* file = "/home/aabiji/Videos/test.webm";
-    //const char* file = "/home/aabiji/Videos/test_stereo.mp4";
+    const char* file = "/home/aabiji/Videos/fat.webm";
     AVFormatContext* format_ctx = NULL;
 
     int ret = 0;
@@ -434,7 +471,7 @@ int main() {
     bool closed = false;
 
     audio_decoder = new_decoder(AVMEDIA_TYPE_AUDIO);
-    AudioQueue audio_queue = new_audio_queue(25);
+    AudioQueue audio_queue = new_audio_queue(100);
     init_decoder(format_ctx, &audio_decoder);
 
     SDL_AudioSpec spec = {};
@@ -443,7 +480,7 @@ int main() {
     wanted_spec.channels = audio_decoder.ctx->ch_layout.nb_channels;
     wanted_spec.callback = sdl_audio_callback;
     wanted_spec.userdata = (void*)&audio_queue;
-    wanted_spec.samples = 4096;
+    wanted_spec.samples = 1024;
     wanted_spec.silence = 0;
     wanted_spec.format = map_audio_format(audio_decoder.ctx->sample_fmt);
     SDL_AudioDeviceID device_id = SDL_OpenAudioDevice(NULL, 0, &wanted_spec, &spec, SDL_AUDIO_ALLOW_ANY_CHANGE);
@@ -462,6 +499,8 @@ int main() {
             } else if (packet->stream_index == audio_decoder.stream_index) {
                 AVPacket* clone = av_packet_clone(packet);
                 queue_audio_packet(&audio_queue, clone);
+            } else {
+                av_packet_free(&packet);
             }
         }
 
@@ -478,6 +517,10 @@ int main() {
         }
    }
 
+    SDL_CloseAudioDevice(device_id);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+
     free_audio_queue(&audio_queue);
     free_decoder(&audio_decoder);
     free_decoder(&video_decoder);
@@ -486,8 +529,5 @@ int main() {
     av_packet_free(&packet);
     avformat_close_input(&format_ctx);
 
-    SDL_CloseAudioDevice(device_id);
-    SDL_DestroyWindow(window);
-    SDL_Quit();
     return 0;
 }
