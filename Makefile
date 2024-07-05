@@ -3,11 +3,11 @@ compile_flags = -Wall -Werror -Wextra -Wno-unused -g
 linker_flags = -lavformat -lavcodec -lavutil -lavfilter -lswscale -lswresample -lSDL2
 outdir = bin
 output = showtime
-files = src/main.c
+files = src/decode.cc src/main.cc
 
 build:
 	mkdir -p ${outdir}
-	gcc ${files} ${compile_flags} ${linker_flags} -o ${outdir}/${output}
+	g++ ${files} ${compile_flags} ${linker_flags} -o ${outdir}/${output}
 
 run: build
 	./${outdir}/${output}

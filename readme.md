@@ -10,7 +10,6 @@ sudo apt install ffmpeg libsdl2-dev
 
 - Split video and audio playback into separate threads
 - see if there are hardware devices for decoding audio -- there are but I'll need to revisit that topic
-- Refactor -- split into mutliple files, use c++, comment
 - Use debugger to trace the code execution path
 - Sync audio to video
 - implement some sort of frame scheduling. right now we're just rendering
