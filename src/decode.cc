@@ -7,16 +7,15 @@ extern "C" {
 
 #include "decode.h"
 
+// TODO: this is a problem
 PixelFormat MediaDecoder::hw_pixel_format;
 
 Decoder::~Decoder()
 {
     avformat_close_input(&format_context);
-    av_packet_free(&packet);
 }
 
-void Decoder::init(const char* file,
-                   FrameHandler video_handler, FrameHandler audio_handler)
+void Decoder::init(const char* file, FrameHandler audio_handler)
 {
     initialized = false;
 
@@ -32,35 +31,47 @@ void Decoder::init(const char* file,
         return;
     }
 
-    packet = av_packet_alloc();
-    samples_handler = audio_handler;
-    frame_handler = video_handler;
-
     video.init(format_context, true);
+    video_thread = std::thread(&MediaDecoder::process_video_frames, &video);
+
     audio.init(format_context, false);
+    audio_thread = std::thread(&MediaDecoder::process_audio_samples, &audio, audio_handler);
+
     initialized = video.initialized && audio.initialized;
 }
 
-void Decoder::decode_packet()
+void Decoder::decode_packets()
 {
-    int ret = av_read_frame(format_context, packet);
-    if (ret < 0) return;
+    int ret = 0;
+    while (ret == 0) {
+        AVPacket* packet = av_packet_alloc();
+        ret = av_read_frame(format_context, packet);
 
-    if (packet->stream_index == video.stream_index) {
-        // TODO: spawn audio playback and video rendering threads
-        // so that they can concurrently. the video playback is slowing down
-        // the audio playback, making it choppy
-        //video.decode_video_frame(packet, frame_handler);
-    } else if (packet->stream_index == audio.stream_index) {
-        audio.decode_audio_samples(packet, samples_handler);
+        if (packet->stream_index == video.stream_index) {
+            video.queue_packet(packet);
+        } else if (packet->stream_index == audio.stream_index) {
+            audio.queue_packet(packet);
+        } else {
+            av_packet_free(&packet);
+        }
     }
-
-    av_packet_unref(packet);
 }
 
 int Decoder::get_fps()
 {
     return av_q2d(format_context->streams[video.stream_index]->r_frame_rate);;
+}
+
+void Decoder::stop_threads()
+{
+    video.stop = true;
+    audio.stop = true;
+}
+
+void Decoder::wait_for_threads()
+{
+    video_thread.join();
+    audio_thread.join();
 }
 
 MediaDecoder::~MediaDecoder()
@@ -92,10 +103,11 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
 
     // Apparaently there's no hardware acceleration for audio
     // Only use hardware acceleration if we found a device supported by the codec
+    hw_device_ctx = NULL;
     find_hardware_device();
     if (hw_device_ctx != NULL) {
-        hw_device_ctx = av_buffer_ref(hw_device_ctx);
         codec_context->get_format = get_hw_pixel_format;
+        codec_context->hw_device_ctx = av_buffer_ref(hw_device_ctx);
     }
 
     if ((ret = avcodec_open2(codec_context, codec, NULL)) < 0) {
@@ -103,6 +115,7 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
+    stop = false;
     initialized = true;
 }
 
@@ -132,12 +145,17 @@ void MediaDecoder::find_hardware_device()
 
             int ret = av_hwdevice_ctx_create(&hw_device_ctx,
                                              device_type, NULL, NULL, 0);
-            if (ret > 0) { // Found a hardware device
+            if (ret == 0) { // Found a hardware device
                 break;
             }
         }
         device_type = av_hwdevice_iterate_types(device_type);
     }
+}
+
+void MediaDecoder::queue_packet(AVPacket* packet)
+{
+    packet_queue.push(packet);
 }
 
 // Convert the audio samples format to the new format
@@ -177,7 +195,7 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
-int MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
+void MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
 {
     AVFrame* frame = NULL;
     int ret = 0;
@@ -187,7 +205,7 @@ int MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
 
     if ((ret = avcodec_send_packet(codec_context, packet)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
-        return ret;
+        return;
     }
 
     while (true) {
@@ -196,11 +214,11 @@ int MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
             // At the end of packet or we need to send new input
             av_frame_free(&frame);
-            return 0;
+            return;
         } else if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
             av_frame_free(&frame);
-            return ret;
+            return;
         }
 
         // Convert the audio samples to the signed 16 bit format
@@ -212,7 +230,7 @@ int MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
         av_frame_free(&frame);
     }
 
-    return ret;
+    return;
 }
 
 void MediaDecoder::set_video_frame_size(int width, int height)
@@ -256,19 +274,16 @@ int scale_frame(AVFrame* frame, enum AVPixelFormat new_format,
     return size;
 }
 
-int MediaDecoder::decode_video_frame(AVPacket* packet, FrameHandler handler)
+void MediaDecoder::decode_video_frame(AVPacket* packet)
 {
     AVFrame* hw_frame  = NULL;
     AVFrame* sw_frame  = NULL;
     AVFrame* frame     = NULL;
 
-    int size = 0;
-    uint8_t* pixels;
-
     int ret = 0;
     if ((ret = avcodec_send_packet(codec_context, packet)) < 0) {
         av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
-        return ret;
+        return;
     }
 
     while (true) {
@@ -280,32 +295,60 @@ int MediaDecoder::decode_video_frame(AVPacket* packet, FrameHandler handler)
             // At the end of packet or we need to send new input
             av_frame_free(&hw_frame);
             av_frame_free(&sw_frame);
-            return 0;
+            return;
         } else if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
-            goto error;
+            av_frame_free(&hw_frame);
+            av_frame_free(&sw_frame);
+            return;
         }
 
         // format could also be AVSampleFormat
         if (hw_frame->format == hw_pixel_format) { // GPU decoded frame
             if ((ret = av_hwframe_transfer_data(sw_frame, hw_frame, 0)) < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Couldn't send frame from the GPU to the CPU\n");
-                goto error;
+                av_frame_free(&hw_frame);
+                av_frame_free(&sw_frame);
+                return;
             }
             frame = sw_frame;
         } else { // CPU decoded frame
             frame = hw_frame;
         }
 
-        size = scale_frame(frame, AV_PIX_FMT_ABGR, frame_width, frame_height, &pixels);
-        handler(size, pixels);
+        VideoFrame vf = {NULL, 0};
+        vf.size = scale_frame(frame, AV_PIX_FMT_ABGR, frame_width, frame_height, &vf.pixels);
+        frame_queue.push(vf);
 
-        error:
-            av_frame_free(&hw_frame);
-            av_frame_free(&sw_frame);
-            free(pixels);
-            if (ret < 0) return ret;
+        av_frame_free(&hw_frame);
+        av_frame_free(&sw_frame);
     }
+}
 
-    return ret;
+void MediaDecoder::process_video_frames()
+{
+    while (true) {
+        if (stop) break;
+        if (packet_queue.empty()) continue;
+
+        AVPacket* packet = packet_queue.front();
+        packet_queue.pop();
+
+        decode_video_frame(packet);
+        av_packet_free(&packet);
+    }
+}
+
+void MediaDecoder::process_audio_samples(FrameHandler handler)
+{
+    while (true) {
+        if (stop) break;
+        if (packet_queue.empty()) continue;
+
+        AVPacket* packet = packet_queue.front();
+        packet_queue.pop();
+
+        decode_audio_samples(packet, handler);
+        av_packet_free(&packet);
+    }
 }
