@@ -7,7 +7,7 @@ extern "C" {
 
 #include "decode.h"
 
-// TODO: this is a problem
+// This is fine so long there is only 1 video MediaDecoder
 PixelFormat MediaDecoder::hw_pixel_format;
 
 Decoder::~Decoder()
@@ -15,19 +15,19 @@ Decoder::~Decoder()
     avformat_close_input(&format_context);
 }
 
-void Decoder::init(const char* file, FrameHandler audio_handler)
+void Decoder::init(const char* file, AudioHandler audio_handler)
 {
     initialized = false;
 
     int ret = 0;
     format_context = avformat_alloc_context();
-    if ((ret = avformat_open_input(&format_context, file, NULL, NULL)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't open input file\n");
+    if ((ret = avformat_open_input(&format_context, file, nullptr, nullptr)) < 0) {
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't open input file\n");
         return;
     }
 
-    if ((ret = avformat_find_stream_info(format_context, NULL)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't read stream info\n");
+    if ((ret = avformat_find_stream_info(format_context, nullptr)) < 0) {
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't read stream info\n");
         return;
     }
 
@@ -89,7 +89,7 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
 
     ret = av_find_best_stream(context, type, -1, -1, &codec, 0);
     if (ret < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't find a media stream\n");
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't find a media stream\n");
         return;
     }
 
@@ -103,15 +103,15 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
 
     // Apparaently there's no hardware acceleration for audio
     // Only use hardware acceleration if we found a device supported by the codec
-    hw_device_ctx = NULL;
+    hw_device_ctx = nullptr;
     find_hardware_device();
-    if (hw_device_ctx != NULL) {
+    if (hw_device_ctx != nullptr) {
         codec_context->get_format = get_hw_pixel_format;
         codec_context->hw_device_ctx = av_buffer_ref(hw_device_ctx);
     }
 
-    if ((ret = avcodec_open2(codec_context, codec, NULL)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't open media decoder\n");
+    if ((ret = avcodec_open2(codec_context, codec, nullptr)) < 0) {
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't open media decoder\n");
         return;
     }
 
@@ -128,7 +128,7 @@ PixelFormat MediaDecoder::get_hw_pixel_format(AVCodecContext* context,
             return *format;
         }
     }
-    av_log(NULL, AV_LOG_ERROR, "Couldn't get the hardware surface format\n");
+    av_log(nullptr, AV_LOG_ERROR, "Couldn't get the hardware surface format\n");
     return AV_PIX_FMT_NONE;
 }
 
@@ -139,12 +139,12 @@ void MediaDecoder::find_hardware_device()
     while (device_type != AV_HWDEVICE_TYPE_NONE) {
         const AVCodecHWConfig* config = avcodec_get_hw_config(codec, device_type);
 
-        if (config != NULL &&
+        if (config != nullptr &&
             config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) {
             hw_pixel_format = config->pix_fmt;
 
             int ret = av_hwdevice_ctx_create(&hw_device_ctx,
-                                             device_type, NULL, NULL, 0);
+                                             device_type, nullptr, nullptr, 0);
             if (ret == 0) { // Found a hardware device
                 break;
             }
@@ -156,6 +156,17 @@ void MediaDecoder::find_hardware_device()
 void MediaDecoder::queue_packet(AVPacket* packet)
 {
     packet_queue.push(packet);
+}
+
+VideoFrame MediaDecoder::get_frame()
+{
+    if (frame_queue.empty()) {
+        return VideoFrame();
+    }
+
+    VideoFrame frame = frame_queue.front();
+    frame_queue.pop();
+    return frame;
 }
 
 // Convert the audio samples format to the new format
@@ -175,11 +186,11 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     AVChannelLayout layout;
     av_channel_layout_from_mask(&layout, layout_mask);
 
-    SwrContext* ctx = NULL;
+    SwrContext* ctx = nullptr;
     swr_alloc_set_opts2(&ctx, &layout, new_format,
                         input_context->sample_rate, &input_context->ch_layout,
                         input_context->sample_fmt, input_context->sample_rate,
-                        0, NULL);
+                        0, nullptr);
     swr_init(ctx);
 
     int size = 0;
@@ -195,16 +206,16 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
-void MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
+void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
 {
-    AVFrame* frame = NULL;
+    AVFrame* frame = nullptr;
     int ret = 0;
 
     int size = 0;
-    uint8_t** audio = NULL;
+    uint8_t** audio = nullptr;
 
     if ((ret = avcodec_send_packet(codec_context, packet)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't decode packet\n");
         return;
     }
 
@@ -216,7 +227,7 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
             av_frame_free(&frame);
             return;
         } else if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
+            av_log(nullptr, AV_LOG_ERROR, "Couldn't receive frame\n");
             av_frame_free(&frame);
             return;
         }
@@ -231,6 +242,19 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, FrameHandler handler)
     }
 
     return;
+}
+
+void MediaDecoder::process_audio_samples(AudioHandler handler)
+{
+    while (!stop) {
+        if (packet_queue.empty()) continue;
+
+        AVPacket* packet = packet_queue.front();
+        packet_queue.pop();
+
+        decode_audio_samples(packet, handler);
+        av_packet_free(&packet);
+    }
 }
 
 void MediaDecoder::set_video_frame_size(int width, int height)
@@ -257,7 +281,7 @@ int scale_frame(AVFrame* frame, enum AVPixelFormat new_format,
     struct SwsContext* ctx = sws_getContext(frame->width, frame->height,
                                             format, new_width, new_height,
                                             new_format, SWS_BILINEAR,
-                                            NULL, NULL, NULL);
+                                            nullptr, nullptr, nullptr);
     sws_scale(ctx, (const uint8_t* const*)frame->data,
               frame->linesize, 0, frame->height,
               (uint8_t* const*)destination->data, destination->linesize);
@@ -276,13 +300,13 @@ int scale_frame(AVFrame* frame, enum AVPixelFormat new_format,
 
 void MediaDecoder::decode_video_frame(AVPacket* packet)
 {
-    AVFrame* hw_frame  = NULL;
-    AVFrame* sw_frame  = NULL;
-    AVFrame* frame     = NULL;
+    AVFrame* hw_frame  = nullptr;
+    AVFrame* sw_frame  = nullptr;
+    AVFrame* frame     = nullptr;
 
     int ret = 0;
     if ((ret = avcodec_send_packet(codec_context, packet)) < 0) {
-        av_log(NULL, AV_LOG_ERROR, "Couldn't decode packet\n");
+        av_log(nullptr, AV_LOG_ERROR, "Couldn't decode packet\n");
         return;
     }
 
@@ -297,7 +321,7 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
             av_frame_free(&sw_frame);
             return;
         } else if (ret < 0) {
-            av_log(NULL, AV_LOG_ERROR, "Couldn't receive frame\n");
+            av_log(nullptr, AV_LOG_ERROR, "Couldn't receive frame\n");
             av_frame_free(&hw_frame);
             av_frame_free(&sw_frame);
             return;
@@ -306,7 +330,7 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         // format could also be AVSampleFormat
         if (hw_frame->format == hw_pixel_format) { // GPU decoded frame
             if ((ret = av_hwframe_transfer_data(sw_frame, hw_frame, 0)) < 0) {
-                av_log(NULL, AV_LOG_ERROR, "Couldn't send frame from the GPU to the CPU\n");
+                av_log(nullptr, AV_LOG_ERROR, "Couldn't send frame from the GPU to the CPU\n");
                 av_frame_free(&hw_frame);
                 av_frame_free(&sw_frame);
                 return;
@@ -316,8 +340,10 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
             frame = hw_frame;
         }
 
-        VideoFrame vf = {NULL, 0};
+        VideoFrame vf;
         vf.size = scale_frame(frame, AV_PIX_FMT_ABGR, frame_width, frame_height, &vf.pixels);
+        vf.width = frame_width;
+        vf.height = frame_height;
         frame_queue.push(vf);
 
         av_frame_free(&hw_frame);
@@ -327,28 +353,13 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
 
 void MediaDecoder::process_video_frames()
 {
-    while (true) {
-        if (stop) break;
+    while (!stop) {
         if (packet_queue.empty()) continue;
 
         AVPacket* packet = packet_queue.front();
         packet_queue.pop();
 
         decode_video_frame(packet);
-        av_packet_free(&packet);
-    }
-}
-
-void MediaDecoder::process_audio_samples(FrameHandler handler)
-{
-    while (true) {
-        if (stop) break;
-        if (packet_queue.empty()) continue;
-
-        AVPacket* packet = packet_queue.front();
-        packet_queue.pop();
-
-        decode_audio_samples(packet, handler);
         av_packet_free(&packet);
     }
 }

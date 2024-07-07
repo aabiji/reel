@@ -1,26 +1,27 @@
-# 🎬 Show Time !
-A video player. Built in C using FFmpeg and SDL.
+# 🎬 Show Time!
 I watch *a lot* of videos, so how does video playback work?
-[This is a nice guide](http://dranger.com/ffmpeg/tutorial01.html)
+Bring in showtime, a vide player built in c++ using FFMpeg and SDL.
+This project is more of a learning opportunity more than anything
+so don't take this too seriously
 
 Setup:
 ```
 sudo apt install ffmpeg libsdl2-dev
 ```
 
-- Split video and audio playback into separate threads
-- see if there are hardware devices for decoding audio -- there are but I'll need to revisit that topic
-- Use debugger to trace the code execution path
-- Sync audio to video
-- implement some sort of frame scheduling. right now we're just rendering
-  as many frames as possible, but we need a way to control that
+TODO:
+- Mutex to prevent data races when accessing the queues
+- Synchronize audio and video
+- Resize the window
+- Use a profiler to optimise the code
+- See if there are hardware devices for decoding audio
 
 Sub projects:
 - Renderer (OpenGL?)
-- GPU accelerated video decoding (ffmpeg stuff)
-- Sound playback
+- GPU accelerated video decoding (ffmpeg stuff) -- check
+- Sound playback -- check
 - Some way to sync sound and video
-- Do multiple things on different threads
+- Do multiple things on different threads -- check
 - Basic UI (take a look at microui)
 - Subtitles using WhisperCpp???
 - Features
