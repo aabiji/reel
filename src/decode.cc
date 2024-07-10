@@ -5,12 +5,27 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-#include <iostream>
-
 #include "decode.h"
+
+#include <iostream>
 
 // This is fine so long there is only 1 video MediaDecoder
 PixelFormat MediaDecoder::hw_pixel_format;
+
+Frame::Frame(AVFrame* _frame)
+{
+    size = 0;
+    data = nullptr;
+    ff_frame = _frame;
+}
+
+void Frame::cleanup()
+{
+    if (ff_frame != nullptr)
+        av_frame_free(&ff_frame);
+    if (data != nullptr)
+        free(data);
+}
 
 Decoder::~Decoder()
 {
@@ -163,13 +178,13 @@ void MediaDecoder::queue_packet(AVPacket* packet)
     packet_queue.push(packet);
 }
 
-VideoFrame MediaDecoder::get_frame()
+Frame MediaDecoder::get_frame()
 {
     if (frame_queue.empty()) {
-        return VideoFrame();
+        return Frame(NULL);
     }
 
-    VideoFrame frame = frame_queue.front();
+    Frame frame = frame_queue.front();
     frame_queue.pop();
     return frame;
 }
@@ -211,6 +226,9 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
+// TODO: fix these errors:
+// [opus @ 0x642184c45100] Could not update timestamps for skipped samples.
+// [opus @ 0x642184c45100] Could not update timestamps for discarded samples.
 void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
 {
     AVFrame* frame = nullptr;
@@ -227,11 +245,10 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
     while (true) {
         frame = av_frame_alloc();
         ret = avcodec_receive_frame(codec_context, frame);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            // At the end of packet or we need to send new input
+        if (ret == AVERROR_EOF || AVERROR(EAGAIN)) {
             av_frame_free(&frame);
             return;
-        } else if (ret < 0) {
+        } else if (ret < 0) { // Error
             av_log(nullptr, AV_LOG_ERROR, "Couldn't receive frame\n");
             av_frame_free(&frame);
             return;
@@ -239,7 +256,7 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
 
         double pts = frame->pts * time_base;
         double dts = frame->pkt_dts * time_base;
-        std::cout << "Audio > PTS: " << pts << " DTS: " << dts << "\n";
+        // std::cout << "Audio > PTS: " << pts << " DTS: " << dts << "\n";
 
         // Convert the audio samples to the signed 16 bit format
         size = resample_audio(codec_context, frame, AV_SAMPLE_FMT_S16, &audio);
@@ -265,12 +282,6 @@ void MediaDecoder::process_audio_samples(AudioHandler handler)
         decode_audio_samples(packet, handler);
         av_packet_free(&packet);
     }
-}
-
-void MediaDecoder::set_video_frame_size(int width, int height)
-{
-    frame_width = width;
-    frame_height = height;
 }
 
 // Convert the frame's pixel format to the new format
@@ -306,6 +317,12 @@ int scale_frame(AVFrame* frame, enum AVPixelFormat new_format,
         new_format, new_width, new_height, 1);
 
     return size;
+}
+
+void MediaDecoder::resize_frame(Frame* frame, int new_width, int new_height)
+{
+    AVFrame* f = frame->ff_frame;
+    frame->size = scale_frame(f, AV_PIX_FMT_ABGR, new_width, new_height, &frame->data);
 }
 
 void MediaDecoder::decode_video_frame(AVPacket* packet)
@@ -353,12 +370,9 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
 
         double pts = frame->pts * time_base;
         double dts = frame->pkt_dts * time_base;
-        std::cout << "Video > PTS: " << pts << " DTS: " << dts << "\n";
+        // std::cout << "Video > PTS: " << pts << " DTS: " << dts << "\n";
 
-        VideoFrame vf;
-        vf.size = scale_frame(frame, AV_PIX_FMT_ABGR, frame_width, frame_height, &vf.pixels);
-        vf.width = frame_width;
-        vf.height = frame_height;
+        Frame vf(av_frame_clone(frame));
         frame_queue.push(vf);
 
         av_frame_free(&hw_frame);

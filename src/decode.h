@@ -12,19 +12,13 @@ extern "C" {
 using PixelFormat = enum AVPixelFormat;
 using AudioHandler = std::function<void(int, uint8_t*)>;
 
-struct VideoFrame {
+struct Frame {
     int size;
-    uint8_t* pixels;
-    int width;
-    int height;
+    uint8_t* data;
+    AVFrame* ff_frame;
 
-    VideoFrame()
-    {
-        size = 0;
-        pixels = nullptr;
-        width = 0;
-        height = 0;
-    }
+    Frame(AVFrame* _frame);
+    void cleanup();
 };
 
 class MediaDecoder {
@@ -44,13 +38,15 @@ public:
     // samples are then handled by the player.
     void process_audio_samples(AudioHandler handler);
 
-    // Get a video frame from the frame queue. The returned
-    // frame's pixels field will be null if the queue is empty.
-    VideoFrame get_frame();
+    // Get a video or audio frame from the frame queue. The returned
+    // frame's ff_frame field will be NULL if the queue is empty.
+    Frame get_frame();
+
+    // Resize a frame to the new width and height
+    void resize_frame(Frame* frame, int new_width, int new_height);
 
     void queue_packet(AVPacket* packet);
 
-    void set_video_frame_size(int width, int height);
     int get_sample_rate() { return codec_context->sample_rate; }
     int get_channel_count() { return codec_context->ch_layout.nb_channels; }
 
@@ -72,16 +68,13 @@ private:
         const PixelFormat* formats);
 
     std::queue<AVPacket*> packet_queue;
-    std::queue<VideoFrame> frame_queue;
+    std::queue<Frame> frame_queue;
 
     const AVCodec* codec;
     AVCodecContext* codec_context;
 
     AVBufferRef* hw_device_ctx; // Hardware device context
     static PixelFormat hw_pixel_format; // Hardware pixel format
-
-    int frame_width;
-    int frame_height;
 
     // Unit of time used to measure frame timestamps
     // Converted from AVRational to decimal form

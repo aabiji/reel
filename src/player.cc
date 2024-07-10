@@ -15,7 +15,6 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
 
     decoder.init(file, lambda);
     if (decoder.initialized) {
-        decoder.video.set_video_frame_size(width, height);
         decoder_thread = std::thread(&Decoder::decode_packets, &decoder);
     }
 
@@ -51,15 +50,15 @@ bool Player::successful_init()
 
 void Player::render_frame()
 {
-    VideoFrame frame = decoder.video.get_frame();
-    if (frame.pixels == nullptr)
+    Frame frame = decoder.video.get_frame();
+    if (frame.ff_frame == nullptr)
         return;
-    if (frame.width != frame_width || frame.height != frame_height)
-        return;
+
+    decoder.video.resize_frame(&frame, frame_width, frame_height);
 
     int pitch = frame_width * 3;
     SDL_LockTexture(frame_texture, nullptr, &frame_pixels, &pitch);
-    memcpy(frame_pixels, frame.pixels, frame.size);
+    memcpy(frame_pixels, frame.data, frame.size);
     SDL_UnlockTexture(frame_texture);
 
     SDL_Rect rect = { 0, 0, frame_width, frame_height };
@@ -67,7 +66,7 @@ void Player::render_frame()
     SDL_RenderCopy(renderer, frame_texture, nullptr, &rect);
     SDL_RenderPresent(renderer);
 
-    free(frame.pixels);
+    frame.cleanup();
 }
 
 void Player::audio_handler(int size, uint8_t* samples)
@@ -75,7 +74,6 @@ void Player::audio_handler(int size, uint8_t* samples)
     SDL_QueueAudio(device_id, samples, size);
 }
 
-// FIXME: this is broken
 void Player::resize(int new_width, int new_height)
 {
     frame_width = new_width;
@@ -83,5 +81,4 @@ void Player::resize(int new_width, int new_height)
     SDL_DestroyTexture(frame_texture);
     frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
         SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
-    decoder.video.set_video_frame_size(new_width, new_height);
 }
