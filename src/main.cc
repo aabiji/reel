@@ -1,14 +1,15 @@
 #include "player.h"
 
-int main() {
+int main()
+{
     SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED, 700, 500,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOWPOS_CENTERED, 700, 500,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     SDL_Event event;
     bool closed = false;
 
-    const char* file = "/home/aabiji/Videos/bring-sally-up.webm";
+    const char* file = "/home/aabiji/Videos/fat.webm";
     Player player(window, file, 700, 500);
     if (!player.successful_init()) {
         player.cleanup();
@@ -27,14 +28,13 @@ int main() {
                 break;
             }
 
-            if (event.type == SDL_WINDOWEVENT &&
-                event.window.event == SDL_WINDOWEVENT_RESIZED) {
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
                 player.resize(event.window.data1, event.window.data2);
             }
         }
 
         SDL_Delay(player.delay);
-   }
+    }
 
     player.cleanup();
     SDL_DestroyWindow(window);

@@ -7,7 +7,7 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
     frame_pixels = nullptr;
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-                                      SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
+        SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
 
     auto lambda = [this](int size, uint8_t* samples) {
         this->audio_handler(size, samples);
@@ -52,7 +52,8 @@ bool Player::successful_init()
 void Player::render_frame()
 {
     VideoFrame frame = decoder.video.get_frame();
-    if (frame.pixels == nullptr) return;
+    if (frame.pixels == nullptr)
+        return;
     if (frame.width != frame_width || frame.height != frame_height)
         return;
 
@@ -61,7 +62,7 @@ void Player::render_frame()
     memcpy(frame_pixels, frame.pixels, frame.size);
     SDL_UnlockTexture(frame_texture);
 
-    SDL_Rect rect = {0, 0, frame_width, frame_height};
+    SDL_Rect rect = { 0, 0, frame_width, frame_height };
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, frame_texture, nullptr, &rect);
     SDL_RenderPresent(renderer);
@@ -81,6 +82,6 @@ void Player::resize(int new_width, int new_height)
     frame_height = new_height;
     SDL_DestroyTexture(frame_texture);
     frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-                                      SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
+        SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
     decoder.video.set_video_frame_size(new_width, new_height);
 }

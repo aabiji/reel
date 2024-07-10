@@ -1,9 +1,11 @@
 extern "C" {
+#include <libavutil/hwcontext.h>
+#include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/hwcontext.h>
 }
+
+#include <iostream>
 
 #include "decode.h"
 
@@ -59,7 +61,8 @@ void Decoder::decode_packets()
 
 int Decoder::get_fps()
 {
-    return av_q2d(format_context->streams[video.stream_index]->r_frame_rate);;
+    return av_q2d(format_context->streams[video.stream_index]->r_frame_rate);
+    ;
 }
 
 void Decoder::stop_threads()
@@ -76,7 +79,8 @@ void Decoder::wait_for_threads()
 
 MediaDecoder::~MediaDecoder()
 {
-    if (!initialized) return;
+    if (!initialized)
+        return;
     av_buffer_unref(&hw_device_ctx);
     avcodec_free_context(&codec_context);
 }
@@ -115,12 +119,14 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
+    time_base = av_q2d(context->streams[stream_index]->time_base);
+
     stop = false;
     initialized = true;
 }
 
 PixelFormat MediaDecoder::get_hw_pixel_format(AVCodecContext* context,
-                                         const PixelFormat* formats)
+    const PixelFormat* formats)
 {
     const PixelFormat* format;
     for (format = formats; *format != AV_PIX_FMT_NONE; format++) {
@@ -139,12 +145,11 @@ void MediaDecoder::find_hardware_device()
     while (device_type != AV_HWDEVICE_TYPE_NONE) {
         const AVCodecHWConfig* config = avcodec_get_hw_config(codec, device_type);
 
-        if (config != nullptr &&
-            config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) {
+        if (config != nullptr && config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) {
             hw_pixel_format = config->pix_fmt;
 
             int ret = av_hwdevice_ctx_create(&hw_device_ctx,
-                                             device_type, nullptr, nullptr, 0);
+                device_type, nullptr, nullptr, 0);
             if (ret == 0) { // Found a hardware device
                 break;
             }
@@ -173,7 +178,7 @@ VideoFrame MediaDecoder::get_frame()
 // Write the resampled audio samples into samples and
 // return the size in bytes of the samples array
 int resample_audio(AVCodecContext* input_context, AVFrame* frame,
-                   AVSampleFormat new_format, uint8_t*** samples)
+    AVSampleFormat new_format, uint8_t*** samples)
 {
     int channels = input_context->ch_layout.nb_channels;
     uint64_t layout_mask = AV_CH_LAYOUT_MONO;
@@ -188,19 +193,19 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
 
     SwrContext* ctx = nullptr;
     swr_alloc_set_opts2(&ctx, &layout, new_format,
-                        input_context->sample_rate, &input_context->ch_layout,
-                        input_context->sample_fmt, input_context->sample_rate,
-                        0, nullptr);
+        input_context->sample_rate, &input_context->ch_layout,
+        input_context->sample_fmt, input_context->sample_rate,
+        0, nullptr);
     swr_init(ctx);
 
     int size = 0;
     av_samples_alloc_array_and_samples(samples, &size,
-                                       channels, frame->nb_samples,
-                                       new_format, 1);
+        channels, frame->nb_samples,
+        new_format, 1);
 
     swr_convert(ctx, *samples, frame->nb_samples,
-               (const uint8_t**)frame->extended_data,
-               frame->nb_samples);
+        (const uint8_t**)frame->extended_data,
+        frame->nb_samples);
 
     swr_free(&ctx);
     return size;
@@ -232,6 +237,10 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
             return;
         }
 
+        double pts = frame->pts * time_base;
+        double dts = frame->pkt_dts * time_base;
+        std::cout << "Audio > PTS: " << pts << " DTS: " << dts << "\n";
+
         // Convert the audio samples to the signed 16 bit format
         size = resample_audio(codec_context, frame, AV_SAMPLE_FMT_S16, &audio);
         handler(size, audio[0]);
@@ -247,7 +256,8 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
 void MediaDecoder::process_audio_samples(AudioHandler handler)
 {
     while (!stop) {
-        if (packet_queue.empty()) continue;
+        if (packet_queue.empty())
+            continue;
 
         AVPacket* packet = packet_queue.front();
         packet_queue.pop();
@@ -268,41 +278,41 @@ void MediaDecoder::set_video_frame_size(int width, int height)
 // Write the resampled pixels into pixels and
 // return the size in bytes of the pixels array
 int scale_frame(AVFrame* frame, enum AVPixelFormat new_format,
-                int new_width, int new_height, uint8_t** pixels)
+    int new_width, int new_height, uint8_t** pixels)
 {
     AVFrame* destination = av_frame_alloc();
     av_image_alloc(destination->data, destination->linesize,
-                   new_width, new_height, new_format, 1);
+        new_width, new_height, new_format, 1);
     destination->width = new_width;
     destination->height = new_height;
     destination->format = new_format;
 
     enum AVPixelFormat format = (enum AVPixelFormat)frame->format;
     struct SwsContext* ctx = sws_getContext(frame->width, frame->height,
-                                            format, new_width, new_height,
-                                            new_format, SWS_BILINEAR,
-                                            nullptr, nullptr, nullptr);
+        format, new_width, new_height,
+        new_format, SWS_BILINEAR,
+        nullptr, nullptr, nullptr);
     sws_scale(ctx, (const uint8_t* const*)frame->data,
-              frame->linesize, 0, frame->height,
-              (uint8_t* const*)destination->data, destination->linesize);
+        frame->linesize, 0, frame->height,
+        (uint8_t* const*)destination->data, destination->linesize);
     sws_freeContext(ctx);
 
     int size = av_image_get_buffer_size(new_format, new_width, new_height, 1);
     *pixels = new uint8_t[size];
 
     av_image_copy_to_buffer(*pixels, size,
-                           (const uint8_t* const*)destination->data,
-                           (const int*)destination->linesize,
-                           new_format, new_width, new_height, 1);
+        (const uint8_t* const*)destination->data,
+        (const int*)destination->linesize,
+        new_format, new_width, new_height, 1);
 
     return size;
 }
 
 void MediaDecoder::decode_video_frame(AVPacket* packet)
 {
-    AVFrame* hw_frame  = nullptr;
-    AVFrame* sw_frame  = nullptr;
-    AVFrame* frame     = nullptr;
+    AVFrame* hw_frame = nullptr;
+    AVFrame* sw_frame = nullptr;
+    AVFrame* frame = nullptr;
 
     int ret = 0;
     if ((ret = avcodec_send_packet(codec_context, packet)) < 0) {
@@ -317,6 +327,7 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         ret = avcodec_receive_frame(codec_context, hw_frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR(EOF)) {
             // At the end of packet or we need to send new input
+            // If we need to send more packets, what should we do?
             av_frame_free(&hw_frame);
             av_frame_free(&sw_frame);
             return;
@@ -340,6 +351,10 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
             frame = hw_frame;
         }
 
+        double pts = frame->pts * time_base;
+        double dts = frame->pkt_dts * time_base;
+        std::cout << "Video > PTS: " << pts << " DTS: " << dts << "\n";
+
         VideoFrame vf;
         vf.size = scale_frame(frame, AV_PIX_FMT_ABGR, frame_width, frame_height, &vf.pixels);
         vf.width = frame_width;
@@ -354,7 +369,8 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
 void MediaDecoder::process_video_frames()
 {
     while (!stop) {
-        if (packet_queue.empty()) continue;
+        if (packet_queue.empty())
+            continue;
 
         AVPacket* packet = packet_queue.front();
         packet_queue.pop();

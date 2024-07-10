@@ -1,10 +1,9 @@
 #pragma once
 
-#include <SDL2/SDL.h>
 #include "decode.h"
+#include <SDL2/SDL.h>
 
-class Player
-{
+class Player {
 public:
     Player(SDL_Window* window, const char* file, int width, int height);
 
@@ -22,6 +21,7 @@ public:
 
     Decoder decoder;
     float delay;
+
 private:
     SDL_Renderer* renderer;
     SDL_Texture* frame_texture;

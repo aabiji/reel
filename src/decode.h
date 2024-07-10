@@ -12,8 +12,7 @@ extern "C" {
 using PixelFormat = enum AVPixelFormat;
 using AudioHandler = std::function<void(int, uint8_t*)>;
 
-struct VideoFrame
-{
+struct VideoFrame {
     int size;
     uint8_t* pixels;
     int width;
@@ -28,8 +27,7 @@ struct VideoFrame
     }
 };
 
-class MediaDecoder
-{
+class MediaDecoder {
 public:
     ~MediaDecoder();
 
@@ -59,6 +57,7 @@ public:
     bool initialized;
     int stream_index;
     bool stop;
+
 private:
     void decode_video_frame(AVPacket* packet);
     void decode_audio_samples(AVPacket* packet, AudioHandler handler);
@@ -70,7 +69,7 @@ private:
 
     // FFMpeg hardware device callback
     static PixelFormat get_hw_pixel_format(AVCodecContext* context,
-                                           const PixelFormat* formats);
+        const PixelFormat* formats);
 
     std::queue<AVPacket*> packet_queue;
     std::queue<VideoFrame> frame_queue;
@@ -83,10 +82,13 @@ private:
 
     int frame_width;
     int frame_height;
+
+    // Unit of time used to measure frame timestamps
+    // Converted from AVRational to decimal form
+    double time_base;
 };
 
-class Decoder
-{
+class Decoder {
 public:
     ~Decoder();
 
@@ -102,6 +104,7 @@ public:
     MediaDecoder video;
     MediaDecoder audio;
     bool initialized;
+
 private:
     std::thread video_thread;
     std::thread audio_thread;
