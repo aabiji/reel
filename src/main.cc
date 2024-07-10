@@ -18,22 +18,23 @@ int main()
         return -1;
     }
 
+    player.schedule_a_video_refresh(50);
     while (!closed) {
-        player.render_frame();
+        SDL_WaitEvent(&event);
 
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_QUIT) {
-                player.decoder.stop_threads(); // TODO: find a better way to stop the threads
-                closed = true;
-                break;
-            }
-
-            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_RESIZED) {
+        switch (event.type) {
+        case SDL_QUIT:
+            player.decoder.stop_threads(); // TODO: find a better way to stop the threads
+            closed = true;
+            break;
+        case SDL_WINDOWEVENT:
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED)
                 player.resize(event.window.data1, event.window.data2);
-            }
+            break;
+        case REFRESH_EVENT:
+            player.refresh();
+            break;
         }
-
-        SDL_Delay(player.delay);
     }
 
     player.cleanup();

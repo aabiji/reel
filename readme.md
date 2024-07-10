@@ -6,7 +6,7 @@ so don't take this too seriously
 
 To run:
 ```
-sudo apt install ffmpeg libsdl2-dev
+sudo apt install ffmpeg libsdl2-dev libavdevice-dev
 
 git clone https://github.com/aabiji/showtime
 
@@ -28,7 +28,10 @@ So humans are more sensitive to changes in audio than we are to video, so we'll 
 - [Synchronizing audio and video](https://www.programmersought.com/article/21844834744/)
 
 TODO:
+- Call av_guess_sample_aspect_ratio() to determine initial window height and width
+- Ninja & mold for faster builds
 - Mutex to prevent data races when accessing the queues
+- Pre initializing the scalers
 - Synchronize audio and video
 - Use a profiler to optimise the code
 - See if there are hardware devices for decoding audio

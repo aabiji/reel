@@ -28,7 +28,8 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
     device_id = SDL_OpenAudioDevice(nullptr, 0, &wanted_spec, &received, 0);
     SDL_PauseAudioDevice(device_id, 0);
 
-    delay = 1000 / decoder.get_fps();
+    last_frames_pts = 0;
+    last_frames_delay = 40e-3;
 }
 
 void Player::cleanup()
@@ -48,12 +49,98 @@ bool Player::successful_init()
     return decoder.initialized && decoder.audio.initialized && decoder.video.initialized;
 }
 
-void Player::render_frame()
+void Player::audio_handler(int size, uint8_t* samples)
+{
+    SDL_QueueAudio(device_id, samples, size);
+}
+
+void Player::resize(int new_width, int new_height)
+{
+    frame_width = new_width;
+    frame_height = new_height;
+    SDL_DestroyTexture(frame_texture);
+    frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
+        SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
+}
+
+uint32_t timer_refresh_callback(uint32_t duration, void* opaque)
+{
+    SDL_Event custom_event;
+    custom_event.type = REFRESH_EVENT;
+    custom_event.user.code = 0;
+    custom_event.user.data1 = nullptr;
+    custom_event.user.data2 = nullptr;
+
+    SDL_PushEvent(&custom_event);
+    return 0; // Tell SDL to not call this callback again
+}
+
+void Player::schedule_a_video_refresh(int delay_in_ms)
+{
+    SDL_AddTimer(delay_in_ms, timer_refresh_callback, NULL);
+}
+
+void Player::refresh()
 {
     Frame frame = decoder.video.get_frame();
-    if (frame.ff_frame == nullptr)
+    if (frame.ff_frame == nullptr) {
+        // Wait for more video frames
+        schedule_a_video_refresh(1);
         return;
+    }
 
+    int delay = determine_delay(frame.pts);
+    schedule_a_video_refresh(delay);
+    render_frame(frame);
+}
+
+int Player::determine_delay(double pts)
+{
+    // Delay is the difference between the current pts and
+    // the last frame's pts
+    double delay = pts - last_frames_pts;
+    bool invalid_delay = delay <= 0 || delay >= 1;
+    if (invalid_delay) {
+        delay = last_frames_delay;
+    } else {
+        last_frames_delay = delay;
+    }
+    last_frames_pts = pts;
+
+    double reference_clock = decoder.audio.clock;
+
+    // Acceptable range the frame's pts can be in
+    double sync_threshold = 0.01;
+
+    // We'll consider the frame out of range if it's
+    // pts is bigger than this
+    double out_of_sync_threshold = 10;
+
+    double threshold = delay > sync_threshold ? delay : sync_threshold;
+    double difference = pts - reference_clock;
+
+    if (std::fabs(difference) < out_of_sync_threshold) {
+        // The frame's pts is way behind the audio clock,
+        // so make the delay really small to let the video
+        // catch up to the audio
+        if (difference <= -threshold) {
+            delay = 0;
+        }
+
+        // The frame's pts is way ahead of the audio clock,
+        // so make the delay really big to let the audio catch up
+        else if (difference >= threshold) {
+            delay *= 2;
+        }
+    }
+
+    delay = delay < 0.01 ? 0.01 : delay;
+    int delay_in_ms = delay * 1000 + 0.5;
+    return delay_in_ms;
+}
+
+void Player::render_frame(Frame& frame)
+{
     decoder.video.resize_frame(&frame, frame_width, frame_height);
 
     int pitch = frame_width * 3;
@@ -67,18 +154,4 @@ void Player::render_frame()
     SDL_RenderPresent(renderer);
 
     frame.cleanup();
-}
-
-void Player::audio_handler(int size, uint8_t* samples)
-{
-    SDL_QueueAudio(device_id, samples, size);
-}
-
-void Player::resize(int new_width, int new_height)
-{
-    frame_width = new_width;
-    frame_height = new_height;
-    SDL_DestroyTexture(frame_texture);
-    frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-        SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
 }

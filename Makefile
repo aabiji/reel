@@ -1,6 +1,6 @@
 
 compile_flags = -Wall -Werror -Wextra -Wno-unused -g
-linker_flags = -lavformat -lavcodec -lavutil -lavfilter -lswscale -lswresample -lSDL2
+linker_flags = -lavformat -lavcodec -lavutil -lavfilter -lswscale -lswresample -lavdevice -lSDL2
 outdir = bin
 output = showtime
 files = src/player.cc src/decode.cc src/main.cc

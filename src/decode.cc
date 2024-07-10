@@ -1,4 +1,5 @@
 extern "C" {
+#include <libavdevice/avdevice.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libswresample/swresample.h>
@@ -7,13 +8,12 @@ extern "C" {
 
 #include "decode.h"
 
-#include <iostream>
-
 // This is fine so long there is only 1 video MediaDecoder
 PixelFormat MediaDecoder::hw_pixel_format;
 
-Frame::Frame(AVFrame* _frame)
+Frame::Frame(AVFrame* _frame, int _pts)
 {
+    pts = _pts;
     size = 0;
     data = nullptr;
     ff_frame = _frame;
@@ -32,8 +32,17 @@ Decoder::~Decoder()
     avformat_close_input(&format_context);
 }
 
+// A callback that returns 1 to signal that ffmpeg should
+// stop internal blocking functions
+int stop_internal_blocking_function(void* opaque)
+{
+    Decoder* decoder = (Decoder*)opaque;
+    return decoder->stop;
+}
+
 void Decoder::init(const char* file, AudioHandler audio_handler)
 {
+    avdevice_register_all();
     initialized = false;
 
     int ret = 0;
@@ -47,6 +56,10 @@ void Decoder::init(const char* file, AudioHandler audio_handler)
         av_log(nullptr, AV_LOG_ERROR, "Couldn't read stream info\n");
         return;
     }
+
+    AVIOInterruptCB callback = { stop_internal_blocking_function, this };
+    format_context->interrupt_callback = callback;
+    stop = false;
 
     video.init(format_context, true);
     video_thread = std::thread(&MediaDecoder::process_video_frames, &video);
@@ -82,6 +95,7 @@ int Decoder::get_fps()
 
 void Decoder::stop_threads()
 {
+    stop = true;
     video.stop = true;
     audio.stop = true;
 }
@@ -136,6 +150,7 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
 
     time_base = av_q2d(context->streams[stream_index]->time_base);
 
+    clock = 0;
     stop = false;
     initialized = true;
 }
@@ -181,7 +196,7 @@ void MediaDecoder::queue_packet(AVPacket* packet)
 Frame MediaDecoder::get_frame()
 {
     if (frame_queue.empty()) {
-        return Frame(NULL);
+        return Frame(NULL, 0);
     }
 
     Frame frame = frame_queue.front();
@@ -254,9 +269,7 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
             return;
         }
 
-        double pts = frame->pts * time_base;
-        double dts = frame->pkt_dts * time_base;
-        // std::cout << "Audio > PTS: " << pts << " DTS: " << dts << "\n";
+        clock = frame->pts * time_base;
 
         // Convert the audio samples to the signed 16 bit format
         size = resample_audio(codec_context, frame, AV_SAMPLE_FMT_S16, &audio);
@@ -368,11 +381,19 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
             frame = hw_frame;
         }
 
+        double frame_delay = time_base;
         double pts = frame->pts * time_base;
-        double dts = frame->pkt_dts * time_base;
-        // std::cout << "Video > PTS: " << pts << " DTS: " << dts << "\n";
+        if (pts != 0) {
+            clock = pts;
+        } else {
+            pts = clock;
+        }
 
-        Frame vf(av_frame_clone(frame));
+        // Account for repeating frames by adding a additional delay
+        frame_delay += frame->repeat_pict * (time_base * 0.5);
+        clock += frame_delay;
+
+        Frame vf(av_frame_clone(frame), pts);
         frame_queue.push(vf);
 
         av_frame_free(&hw_frame);

@@ -13,12 +13,16 @@ using PixelFormat = enum AVPixelFormat;
 using AudioHandler = std::function<void(int, uint8_t*)>;
 
 struct Frame {
+    // Presentation Time Stamp: timestamp of
+    // when we should show the frame
+    int pts;
+
     int size;
     uint8_t* data;
     AVFrame* ff_frame;
 
-    Frame(AVFrame* _frame);
     void cleanup();
+    Frame(AVFrame* _frame, int _pts);
 };
 
 class MediaDecoder {
@@ -49,6 +53,10 @@ public:
 
     int get_sample_rate() { return codec_context->sample_rate; }
     int get_channel_count() { return codec_context->ch_layout.nb_channels; }
+
+    // Presentation timestamp of the previously decoded frame,
+    // or the predicted presentation timestamp of the next frame
+    int clock;
 
     bool initialized;
     int stream_index;
@@ -97,6 +105,7 @@ public:
     MediaDecoder video;
     MediaDecoder audio;
     bool initialized;
+    bool stop;
 
 private:
     std::thread video_thread;
