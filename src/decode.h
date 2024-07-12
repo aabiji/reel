@@ -60,7 +60,9 @@ public:
 
     bool initialized;
     int stream_index;
+
     bool stop;
+    bool no_more_packets;
 
 private:
     void decode_video_frame(AVPacket* packet);

@@ -8,6 +8,8 @@ extern "C" {
 
 #include "decode.h"
 
+#include <iostream>
+
 // This is fine so long there is only 1 video MediaDecoder
 PixelFormat MediaDecoder::hw_pixel_format;
 
@@ -73,16 +75,20 @@ void Decoder::init(const char* file, AudioHandler audio_handler)
 void Decoder::decode_packets()
 {
     int ret = 0;
-    while (ret == 0) {
+    while (ret == 0 && !stop) {
         AVPacket* packet = av_packet_alloc();
-        ret = av_read_frame(format_context, packet);
+        if ((ret = av_read_frame(format_context, packet)) == AVERROR_EOF) {
+            audio.no_more_packets = true;
+            video.no_more_packets = true;
+            break;
+        }
 
         if (packet->stream_index == video.stream_index) {
             video.queue_packet(packet);
         } else if (packet->stream_index == audio.stream_index) {
             audio.queue_packet(packet);
         } else {
-            av_packet_free(&packet);
+            av_packet_unref(packet);
         }
     }
 }
@@ -90,7 +96,6 @@ void Decoder::decode_packets()
 int Decoder::get_fps()
 {
     return av_q2d(format_context->streams[video.stream_index]->r_frame_rate);
-    ;
 }
 
 void Decoder::stop_threads()
@@ -117,6 +122,7 @@ MediaDecoder::~MediaDecoder()
 void MediaDecoder::init(AVFormatContext* context, bool is_video)
 {
     initialized = false;
+
     int ret = 0;
     enum AVMediaType type = is_video ? AVMEDIA_TYPE_VIDEO : AVMEDIA_TYPE_AUDIO;
 
@@ -148,10 +154,11 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
-    time_base = av_q2d(context->streams[stream_index]->time_base);
-
     clock = 0;
     stop = false;
+    no_more_packets = false;
+    time_base = av_q2d(context->streams[stream_index]->time_base);
+
     initialized = true;
 }
 
@@ -241,7 +248,7 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
-// TODO: fix these errors:
+// TODO: fix this:
 // [opus @ 0x642184c45100] Could not update timestamps for skipped samples.
 // [opus @ 0x642184c45100] Could not update timestamps for discarded samples.
 void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
@@ -257,10 +264,10 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
         return;
     }
 
-    while (true) {
+    while (!stop) {
         frame = av_frame_alloc();
         ret = avcodec_receive_frame(codec_context, frame);
-        if (ret == AVERROR_EOF || AVERROR(EAGAIN)) {
+        if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN)) {
             av_frame_free(&frame);
             return;
         } else if (ret < 0) { // Error
@@ -279,21 +286,22 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
         free(audio);
         av_frame_free(&frame);
     }
-
-    return;
 }
 
 void MediaDecoder::process_audio_samples(AudioHandler handler)
 {
     while (!stop) {
-        if (packet_queue.empty())
+        if (packet_queue.empty()) {
+            if (no_more_packets)
+                break;
             continue;
+        }
 
         AVPacket* packet = packet_queue.front();
         packet_queue.pop();
 
         decode_audio_samples(packet, handler);
-        av_packet_free(&packet);
+        av_packet_unref(packet);
     }
 }
 
@@ -350,7 +358,7 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         return;
     }
 
-    while (true) {
+    while (!stop) {
         hw_frame = av_frame_alloc();
         sw_frame = av_frame_alloc();
 
@@ -404,13 +412,16 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
 void MediaDecoder::process_video_frames()
 {
     while (!stop) {
-        if (packet_queue.empty())
+        if (packet_queue.empty()) {
+            if (no_more_packets)
+                break;
             continue;
+        }
 
         AVPacket* packet = packet_queue.front();
         packet_queue.pop();
 
         decode_video_frame(packet);
-        av_packet_free(&packet);
+        av_packet_unref(packet);
     }
 }

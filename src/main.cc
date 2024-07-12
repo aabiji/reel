@@ -9,7 +9,7 @@ int main()
     SDL_Event event;
     bool closed = false;
 
-    const char* file = "/home/aabiji/Videos/fat.webm";
+    const char* file = "/home/aabiji/Videos/sync-test.webm";
     Player player(window, file, 700, 500);
     if (!player.successful_init()) {
         player.cleanup();

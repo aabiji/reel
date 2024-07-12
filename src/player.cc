@@ -94,6 +94,7 @@ void Player::refresh()
     render_frame(frame);
 }
 
+// TODO: video delay is way too fast
 int Player::determine_delay(double pts)
 {
     // Delay is the difference between the current pts and
@@ -135,7 +136,7 @@ int Player::determine_delay(double pts)
     }
 
     delay = delay < 0.01 ? 0.01 : delay;
-    int delay_in_ms = delay * 1000 + 0.5;
+    int delay_in_ms = int(delay) * 1000 + 0.5;
     return delay_in_ms;
 }
 
