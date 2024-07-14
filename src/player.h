@@ -23,8 +23,6 @@ public:
 
     bool successful_init();
 
-    Decoder decoder;
-
 private:
     void render_frame(Frame& frame);
 
@@ -34,6 +32,7 @@ private:
 
     int last_frames_pts;
     int last_frames_delay;
+    Decoder decoder;
 
     SDL_Window* window_ref;
     SDL_Renderer* renderer;
@@ -45,6 +44,4 @@ private:
 
     SDL_AudioSpec wanted_spec;
     SDL_AudioDeviceID device_id;
-
-    std::thread decoder_thread;
 };

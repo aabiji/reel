@@ -27,7 +27,6 @@ int main()
 
         switch (event.type) {
         case SDL_QUIT:
-            player.decoder.stop_threads(); // TODO: find a better way to stop the threads
             closed = true;
             break;
         case SDL_WINDOWEVENT:

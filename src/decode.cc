@@ -51,6 +51,8 @@ void Decoder::init(const char* file)
     audio.init(format_context, false);
     audio_thread = std::thread(&MediaDecoder::process_frames, &audio);
 
+    decode_thread = std::thread(&Decoder::decode_packets, this);
+
     initialized = video.initialized && audio.initialized;
 }
 
@@ -85,12 +87,15 @@ void Decoder::stop_threads()
     stop = true;
     video.stop = true;
     audio.stop = true;
-}
 
-void Decoder::wait_for_threads()
-{
-    video_thread.join();
-    audio_thread.join();
+    if (video_thread.joinable())
+        video_thread.join();
+
+    if (audio_thread.joinable())
+        audio_thread.join();
+
+    if (decode_thread.joinable())
+        decode_thread.join();
 }
 
 MediaDecoder::~MediaDecoder()

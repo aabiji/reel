@@ -3,9 +3,6 @@
 Player::Player(SDL_Window* window, const char* file, int width, int height)
 {
     decoder.init(file);
-    if (decoder.initialized) {
-        decoder_thread = std::thread(&Decoder::decode_packets, &decoder);
-    }
 
     frame_width = width;
     frame_height = height;
@@ -33,11 +30,7 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
 
 void Player::cleanup()
 {
-    decoder.wait_for_threads();
-    if (decoder_thread.joinable()) {
-        decoder_thread.join();
-    }
-
+    decoder.stop_threads();
     SDL_DestroyTexture(frame_texture);
     SDL_DestroyRenderer(renderer);
     SDL_CloseAudioDevice(device_id);

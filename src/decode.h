@@ -146,7 +146,6 @@ public:
 
     int get_fps();
     void stop_threads();
-    void wait_for_threads();
 
     MediaDecoder video;
     MediaDecoder audio;
@@ -156,5 +155,7 @@ public:
 private:
     std::thread video_thread;
     std::thread audio_thread;
+    std::thread decode_thread;
+
     AVFormatContext* format_context;
 };
