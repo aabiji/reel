@@ -8,26 +8,8 @@ extern "C" {
 
 #include "decode.h"
 
-#include <iostream>
-
 // This is fine so long there is only 1 video MediaDecoder
 PixelFormat MediaDecoder::hw_pixel_format;
-
-Frame::Frame(AVFrame* _frame, int _pts)
-{
-    pts = _pts;
-    size = 0;
-    data = nullptr;
-    ff_frame = _frame;
-}
-
-void Frame::cleanup()
-{
-    if (ff_frame != nullptr)
-        av_frame_free(&ff_frame);
-    if (data != nullptr)
-        free(data);
-}
 
 Decoder::~Decoder()
 {
@@ -42,7 +24,7 @@ int stop_internal_blocking_function(void* opaque)
     return decoder->stop;
 }
 
-void Decoder::init(const char* file, AudioHandler audio_handler)
+void Decoder::init(const char* file)
 {
     avdevice_register_all();
     initialized = false;
@@ -64,10 +46,10 @@ void Decoder::init(const char* file, AudioHandler audio_handler)
     stop = false;
 
     video.init(format_context, true);
-    video_thread = std::thread(&MediaDecoder::process_video_frames, &video);
+    video_thread = std::thread(&MediaDecoder::process_frames, &video);
 
     audio.init(format_context, false);
-    audio_thread = std::thread(&MediaDecoder::process_audio_samples, &audio, audio_handler);
+    audio_thread = std::thread(&MediaDecoder::process_frames, &audio);
 
     initialized = video.initialized && audio.initialized;
 }
@@ -84,9 +66,9 @@ void Decoder::decode_packets()
         }
 
         if (packet->stream_index == video.stream_index) {
-            video.queue_packet(packet);
+            video.packet_queue.put(packet);
         } else if (packet->stream_index == audio.stream_index) {
-            audio.queue_packet(packet);
+            audio.packet_queue.put(packet);
         } else {
             av_packet_unref(packet);
         }
@@ -204,22 +186,6 @@ void MediaDecoder::find_hardware_device()
     }
 }
 
-void MediaDecoder::queue_packet(AVPacket* packet)
-{
-    packet_queue.push(packet);
-}
-
-Frame MediaDecoder::get_frame()
-{
-    if (frame_queue.empty()) {
-        return Frame(NULL, 0);
-    }
-
-    Frame frame = frame_queue.front();
-    frame_queue.pop();
-    return frame;
-}
-
 // Convert the audio samples format to the new format
 // Write the resampled audio samples into samples and
 // return the size in bytes of the samples array
@@ -257,7 +223,7 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
-void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
+void MediaDecoder::decode_audio_samples(AVPacket* packet)
 {
     AVFrame* frame = nullptr;
     int ret = 0;
@@ -282,32 +248,17 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
             return;
         }
 
+        // TODO: update the clock in the callback
         clock = frame->pts * time_base;
 
         // Convert the audio samples to the signed 16 bit format
         size = resample_audio(codec_context, frame, AV_SAMPLE_FMT_S16, &audio);
-        handler(size, audio[0]);
 
-        free(audio[0]);
+        Frame audio_frame(audio[0], size);
+        frame_queue.put(audio_frame);
+
         free(audio);
         av_frame_free(&frame);
-    }
-}
-
-void MediaDecoder::process_audio_samples(AudioHandler handler)
-{
-    while (!stop) {
-        if (packet_queue.empty()) {
-            if (no_more_packets)
-                break;
-            continue;
-        }
-
-        AVPacket* packet = packet_queue.front();
-        packet_queue.pop();
-
-        decode_audio_samples(packet, handler);
-        av_packet_unref(packet);
     }
 }
 
@@ -409,27 +360,30 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         frame_delay += frame->repeat_pict * (time_base * 0.5);
         clock += frame_delay;
 
-        Frame vf(av_frame_clone(frame), pts);
-        frame_queue.push(vf);
+        Frame video_frame(av_frame_clone(frame), pts);
+        frame_queue.put(video_frame);
 
         av_frame_free(&hw_frame);
         av_frame_free(&sw_frame);
     }
 }
 
-void MediaDecoder::process_video_frames()
+void MediaDecoder::process_frames()
 {
     while (!stop) {
-        if (packet_queue.empty()) {
+        AVPacket* packet = packet_queue.get();
+        if (packet == nullptr) {
             if (no_more_packets)
                 break;
             continue;
         }
 
-        AVPacket* packet = packet_queue.front();
-        packet_queue.pop();
+        if (codec_context->codec_type == AVMEDIA_TYPE_AUDIO) {
+            decode_audio_samples(packet);
+        } else {
+            decode_video_frame(packet);
+        }
 
-        decode_video_frame(packet);
         av_packet_unref(packet);
     }
 }

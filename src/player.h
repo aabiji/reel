@@ -18,9 +18,6 @@ public:
 
     void schedule_a_video_refresh(int delay_in_ms);
 
-    // Callback passed into the audio decoder
-    void audio_handler(int size, uint8_t* samples);
-
     // Resize the frame texture
     void resize(int new_width, int new_height);
 

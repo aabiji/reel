@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <queue>
 #include <thread>
 
@@ -10,19 +11,69 @@ extern "C" {
 }
 
 using PixelFormat = enum AVPixelFormat;
-using AudioHandler = std::function<void(int, uint8_t*)>;
 
-struct Frame {
+// Thread safe queue
+template <typename T>
+class Queue {
+public:
+    void put(T value)
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        queue.push(value);
+    }
+
+    T get()
+    {
+        std::lock_guard<std::mutex> guard(mutex);
+        if (queue.empty()) {
+            return T();
+        }
+
+        T front = queue.front();
+        queue.pop();
+        return front;
+    }
+
+private:
+    std::queue<T> queue;
+    std::mutex mutex;
+};
+
+class Frame {
+public:
+    Frame() { }
+
+    // Video frame constructor, pass in
+    // AVFrame so that it can be resized
+    // on the user side
+    Frame(AVFrame* frame, int _pts)
+    {
+        ff_frame = frame;
+        pts = _pts;
+    }
+
+    // Audio frame constructor
+    Frame(uint8_t* samples, int _size)
+    {
+        data = samples;
+        size = _size;
+    }
+
+    void cleanup()
+    {
+        if (ff_frame != nullptr)
+            av_frame_free(&ff_frame);
+        if (data != nullptr)
+            free(data);
+    }
+
     // Presentation Time Stamp: timestamp of
     // when we should show the frame
-    int pts;
+    int pts = 0;
 
-    int size;
-    uint8_t* data;
-    AVFrame* ff_frame;
-
-    void cleanup();
-    Frame(AVFrame* _frame, int _pts);
+    int size = 0;
+    uint8_t* data = nullptr;
+    AVFrame* ff_frame = nullptr;
 };
 
 class MediaDecoder {
@@ -31,25 +82,13 @@ public:
 
     void init(AVFormatContext* context, bool is_video);
 
-    // Runs on a separate thread, fetching and decoding
-    // video packets from the packet queue. The decoded
-    // frames are queued in the frame queue so the player
-    // can play back those frames at its own rate.
-    void process_video_frames();
-
-    // Runs on a separate thread, fetching and decoding
-    // audio packets from the packet queue. The decoded
-    // samples are then handled by the player.
-    void process_audio_samples(AudioHandler handler);
-
-    // Get a video or audio frame from the frame queue. The returned
-    // frame's ff_frame field will be NULL if the queue is empty.
-    Frame get_frame();
+    // Runs on a separate thread, decoding audio or video
+    // packets pulled from the packet queue and putting
+    // the resulting frame into the frame queue.
+    void process_frames();
 
     // Resize a frame to the new width and height
     void resize_frame(Frame* frame, int new_width, int new_height);
-
-    void queue_packet(AVPacket* packet);
 
     int get_sample_rate() { return codec_context->sample_rate; }
     int get_channel_count() { return codec_context->ch_layout.nb_channels; }
@@ -65,13 +104,16 @@ public:
     // height. (width/height)
     double aspect_ratio;
 
+    Queue<AVPacket*> packet_queue;
+    Queue<Frame> frame_queue;
+
     bool stop;
     bool no_more_packets;
     bool initialized;
 
 private:
     void decode_video_frame(AVPacket* packet);
-    void decode_audio_samples(AVPacket* packet, AudioHandler handler);
+    void decode_audio_samples(AVPacket* packet);
 
     // Iterate through all the possible hardware devices and
     // initialize the hardware device context based off the
@@ -81,9 +123,6 @@ private:
     // FFMpeg hardware device callback
     static PixelFormat get_hw_pixel_format(AVCodecContext* context,
         const PixelFormat* formats);
-
-    std::queue<AVPacket*> packet_queue;
-    std::queue<Frame> frame_queue;
 
     const AVCodec* codec;
     AVCodecContext* codec_context;
@@ -100,7 +139,7 @@ class Decoder {
 public:
     ~Decoder();
 
-    void init(const char* file, AudioHandler audio_handler);
+    void init(const char* file);
 
     // Queue incoming audio and video packets on a separate thread
     void decode_packets();

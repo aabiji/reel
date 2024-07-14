@@ -2,11 +2,7 @@
 
 Player::Player(SDL_Window* window, const char* file, int width, int height)
 {
-    auto lambda = [this](int size, uint8_t* samples) {
-        this->audio_handler(size, samples);
-    };
-
-    decoder.init(file, lambda);
+    decoder.init(file);
     if (decoder.initialized) {
         decoder_thread = std::thread(&Decoder::decode_packets, &decoder);
     }
@@ -52,11 +48,6 @@ bool Player::successful_init()
     return decoder.initialized && decoder.audio.initialized && decoder.video.initialized;
 }
 
-void Player::audio_handler(int size, uint8_t* samples)
-{
-    SDL_QueueAudio(device_id, samples, size);
-}
-
 void Player::resize(int new_width, int new_height)
 {
     double r = decoder.video.aspect_ratio;
@@ -93,7 +84,7 @@ void Player::schedule_a_video_refresh(int delay_in_ms)
 
 void Player::refresh()
 {
-    Frame frame = decoder.video.get_frame();
+    Frame frame = decoder.video.frame_queue.get();
     if (frame.ff_frame == nullptr) {
         // Wait for more video frames
         schedule_a_video_refresh(1);
