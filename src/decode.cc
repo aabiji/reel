@@ -140,6 +140,10 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
+    // Set the decoder timebase so that the decoder can
+    // update the pts and dts of skipped packets
+    codec_context->pkt_timebase = media->time_base;
+
     // Apparaently there's no hardware acceleration for audio
     // Only use hardware acceleration if we found a device supported by the codec
     hw_device_ctx = nullptr;
@@ -253,13 +257,6 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
     return size;
 }
 
-// TODO: fix this:
-// why are we skipping the packet with dts 7??
-// how is ffmpeg getting packets with a dts of 7????
-// Is ffplay doing anything to its audio clock that weren't doing?
-// ffplay has similar packet dts but goes at a much slower rate. Why are we going so fast?
-// [opus @ 0x642184c45100] Could not update timestamps for skipped samples.
-// [opus @ 0x642184c45100] Could not update timestamps for discarded samples.
 void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
 {
     AVFrame* frame = nullptr;
