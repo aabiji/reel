@@ -2,13 +2,6 @@
 
 Player::Player(SDL_Window* window, const char* file, int width, int height)
 {
-    frame_width = width;
-    frame_height = height;
-    frame_pixels = nullptr;
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-        SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
-
     auto lambda = [this](int size, uint8_t* samples) {
         this->audio_handler(size, samples);
     };
@@ -17,6 +10,16 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
     if (decoder.initialized) {
         decoder_thread = std::thread(&Decoder::decode_packets, &decoder);
     }
+
+    frame_width = width;
+    frame_height = height;
+    frame_pixels = nullptr;
+    resized_to_aspect_ratio = false;
+
+    window_ref = window;
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
+        SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
 
     wanted_spec.freq = decoder.audio.get_sample_rate();
     wanted_spec.channels = decoder.audio.get_channel_count();
@@ -56,11 +59,19 @@ void Player::audio_handler(int size, uint8_t* samples)
 
 void Player::resize(int new_width, int new_height)
 {
-    frame_width = new_width;
+    double r = decoder.video.aspect_ratio;
+
     frame_height = new_height;
+    frame_width = r != -1 ? int(r * double(new_height)) : new_width;
+
+    // Do an initial window resize to match the video's aspect ratio
+    if (!resized_to_aspect_ratio) {
+        SDL_SetWindowSize(window_ref, frame_width, frame_height);
+    }
+
     SDL_DestroyTexture(frame_texture);
     frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
-        SDL_TEXTUREACCESS_STREAMING, new_width, new_height);
+        SDL_TEXTUREACCESS_STREAMING, frame_width, frame_height);
 }
 
 uint32_t timer_refresh_callback(uint32_t duration, void* opaque)
@@ -142,6 +153,12 @@ int Player::determine_delay(double pts)
 
 void Player::render_frame(Frame& frame)
 {
+    // Do an initial window resize to match the video's aspect ratio
+    if (!resized_to_aspect_ratio) {
+        resize(frame_width, frame_height);
+        resized_to_aspect_ratio = true;
+    }
+
     decoder.video.resize_frame(&frame, frame_width, frame_height);
 
     int pitch = frame_width * 3;

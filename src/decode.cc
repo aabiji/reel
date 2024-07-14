@@ -154,6 +154,11 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
+    if (type == AVMEDIA_TYPE_VIDEO) {
+        double ratio = av_q2d(media->sample_aspect_ratio);
+        aspect_ratio = ratio == 0 ? 1 : ratio;
+    }
+
     clock = 0;
     stop = false;
     no_more_packets = false;
@@ -249,6 +254,10 @@ int resample_audio(AVCodecContext* input_context, AVFrame* frame,
 }
 
 // TODO: fix this:
+// why are we skipping the packet with dts 7??
+// how is ffmpeg getting packets with a dts of 7????
+// Is ffplay doing anything to its audio clock that weren't doing?
+// ffplay has similar packet dts but goes at a much slower rate. Why are we going so fast?
 // [opus @ 0x642184c45100] Could not update timestamps for skipped samples.
 // [opus @ 0x642184c45100] Could not update timestamps for discarded samples.
 void MediaDecoder::decode_audio_samples(AVPacket* packet, AudioHandler handler)
@@ -396,6 +405,8 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         } else {
             pts = clock;
         }
+
+        aspect_ratio = double(frame->width) / double(frame->height);
 
         // Account for repeating frames by adding a additional delay
         frame_delay += frame->repeat_pict * (time_base * 0.5);

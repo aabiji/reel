@@ -58,11 +58,16 @@ public:
     // or the predicted presentation timestamp of the next frame
     int clock;
 
-    bool initialized;
+    // Number assigned to the particular audio or video stream
     int stream_index;
+
+    // Video frame aspect ratio. Used to adapt the width to the
+    // height. (width/height)
+    double aspect_ratio;
 
     bool stop;
     bool no_more_packets;
+    bool initialized;
 
 private:
     void decode_video_frame(AVPacket* packet);

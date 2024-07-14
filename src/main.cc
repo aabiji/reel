@@ -2,15 +2,18 @@
 
 int main()
 {
+    int default_width = 500;
+    int default_height = 500;
+
     SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED, 700, 500,
+        SDL_WINDOWPOS_CENTERED, default_width, default_height,
         SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     SDL_Event event;
     bool closed = false;
 
     const char* file = "/home/aabiji/Videos/sync-test.webm";
-    Player player(window, file, 700, 500);
+    Player player(window, file, default_width, default_height);
     if (!player.successful_init()) {
         player.cleanup();
         SDL_DestroyWindow(window);

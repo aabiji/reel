@@ -38,11 +38,13 @@ private:
     int last_frames_pts;
     int last_frames_delay;
 
+    SDL_Window* window_ref;
     SDL_Renderer* renderer;
     SDL_Texture* frame_texture;
     void* frame_pixels;
     int frame_width;
     int frame_height;
+    bool resized_to_aspect_ratio;
 
     SDL_AudioSpec wanted_spec;
     SDL_AudioDeviceID device_id;
