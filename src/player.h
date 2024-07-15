@@ -34,8 +34,8 @@ private:
     // the audio and video together
     int determine_delay(double pts);
 
-    int last_frames_pts;
-    int last_frames_delay;
+    double last_frames_pts;
+    double last_frames_delay;
 
     SDL_Window* window_ref;
     SDL_Renderer* renderer;

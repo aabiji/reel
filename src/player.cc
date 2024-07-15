@@ -3,6 +3,8 @@
 Player::Player(SDL_Window* window, const char* file, int width, int height)
 {
     decoder.init(file);
+    if (!decoder.initialized)
+        return;
 
     frame_width = width;
     frame_height = height;
@@ -32,10 +34,13 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
 
 void Player::cleanup()
 {
+    if (!successful_init())
+        return;
+
     decoder.stop_threads();
+    SDL_CloseAudioDevice(device_id);
     SDL_DestroyTexture(frame_texture);
     SDL_DestroyRenderer(renderer);
-    SDL_CloseAudioDevice(device_id);
 }
 
 bool Player::successful_init()
@@ -81,19 +86,18 @@ void Player::refresh()
 {
     Frame frame = decoder.video.frame_queue.get();
     if (frame.ff_frame == nullptr) {
-        // Wait for more video frames
+        // The queue's empty, so wait for more video frames
         schedule_a_video_refresh(1);
         return;
     }
 
     int delay = determine_delay(frame.pts);
-    schedule_a_video_refresh(delay);
     render_frame(frame);
-
     frame.cleanup();
+
+    schedule_a_video_refresh(delay);
 }
 
-// TODO: video delay is way too fast
 int Player::determine_delay(double pts)
 {
     // Delay is the difference between the current pts and
@@ -109,11 +113,12 @@ int Player::determine_delay(double pts)
 
     double reference_clock = decoder.audio.clock;
 
-    // Acceptable range the frame's pts can be in
+    // Acceptable range the frame's pts can be in. We use a
+    // threshold since video and audio can never be perfectly in sync
     double sync_threshold = 0.01;
 
-    // We'll consider the frame out of range if it's
-    // pts is bigger than this
+    // If the frame's pts is outside the range,
+    // then we consider it out of sync
     double out_of_sync_threshold = 10;
 
     double threshold = delay > sync_threshold ? delay : sync_threshold;
@@ -135,7 +140,7 @@ int Player::determine_delay(double pts)
     }
 
     delay = delay < 0.01 ? 0.01 : delay;
-    int delay_in_ms = int(delay) * 1000 + 0.5;
+    int delay_in_ms = int(delay * 1000 + 0.5);
     return delay_in_ms;
 }
 
@@ -180,11 +185,12 @@ void sdl_audio_callback(void* opaque, uint8_t* stream, int remaining)
         remaining -= size;
 
         // Keep reading from one frame until we've read all the data from it
-        player->read_index += size;
+        player->read_index += clamped_size;
         if (player->read_index >= frame.size) {
             player->read_index = 0;
-            // Pop queue to get the next frame
+            // Continue to the next audio frame
             player->decoder.audio.frame_queue.get();
+            player->decoder.audio.tick_clock(frame.pts);
         }
     }
 }

@@ -145,11 +145,6 @@ void MediaDecoder::init(AVFormatContext* context, bool is_video)
         return;
     }
 
-    if (type == AVMEDIA_TYPE_VIDEO) {
-        double ratio = av_q2d(media->sample_aspect_ratio);
-        aspect_ratio = ratio == 0 ? 1 : ratio;
-    }
-
     clock = 0;
     stop = false;
     no_more_packets = false;
@@ -173,6 +168,9 @@ PixelFormat MediaDecoder::get_hw_pixel_format(AVCodecContext* context,
 
 void MediaDecoder::find_hardware_device()
 {
+    int previous_level = av_log_get_level();
+    av_log_set_level(AV_LOG_QUIET); // Don't show any possible errors
+
     enum AVHWDeviceType device_type = av_hwdevice_iterate_types(AV_HWDEVICE_TYPE_NONE);
 
     while (device_type != AV_HWDEVICE_TYPE_NONE) {
@@ -189,6 +187,13 @@ void MediaDecoder::find_hardware_device()
         }
         device_type = av_hwdevice_iterate_types(device_type);
     }
+
+    av_log_set_level(previous_level);
+}
+
+void MediaDecoder::tick_clock(double pts)
+{
+    clock = pts * time_base;
 }
 
 // Convert the audio samples format to the new format
@@ -253,13 +258,10 @@ void MediaDecoder::decode_audio_samples(AVPacket* packet)
             return;
         }
 
-        // TODO: update the clock in the callback
-        clock = frame->pts * time_base;
-
         // Convert the audio samples to the signed 16 bit format
         size = resample_audio(codec_context, frame, AV_SAMPLE_FMT_S16, &audio);
 
-        Frame audio_frame(audio[0], size);
+        Frame audio_frame(audio[0], size, frame->pts);
         frame_queue.put(audio_frame);
 
         free(audio);
@@ -351,6 +353,7 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
             frame = hw_frame;
         }
 
+        // Account for repeating frames by adding a additional delay
         double frame_delay = time_base;
         double pts = frame->pts * time_base;
         if (pts != 0) {
@@ -358,12 +361,16 @@ void MediaDecoder::decode_video_frame(AVPacket* packet)
         } else {
             pts = clock;
         }
-
-        aspect_ratio = double(frame->width) / double(frame->height);
-
-        // Account for repeating frames by adding a additional delay
-        frame_delay += frame->repeat_pict * (time_base * 0.5);
+        frame_delay += frame->repeat_pict * (frame_delay * 0.5);
         clock += frame_delay;
+
+        // Set aspect ratio. The pixel aspect ratio is the aspect
+        // ratio of an individual pixel. It should just be 1, but some
+        // codecs have it differently.
+        double pixel_aspect_ratio = av_q2d(frame->sample_aspect_ratio);
+        aspect_ratio = double(frame->width) / double(frame->height);
+        if (pixel_aspect_ratio != 0)
+            aspect_ratio *= pixel_aspect_ratio;
 
         Frame video_frame(av_frame_clone(frame), pts);
         frame_queue.put(video_frame);

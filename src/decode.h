@@ -53,17 +53,18 @@ public:
     // Video frame constructor, pass in
     // AVFrame so that it can be resized
     // on the user side
-    Frame(AVFrame* frame, int _pts)
+    Frame(AVFrame* frame, double _pts)
     {
         ff_frame = frame;
         pts = _pts;
     }
 
     // Audio frame constructor
-    Frame(uint8_t* samples, int _size)
+    Frame(uint8_t* samples, int _size, double _pts)
     {
         data = samples;
         size = _size;
+        pts = _pts;
     }
 
     void cleanup()
@@ -76,7 +77,7 @@ public:
 
     // Presentation Time Stamp: timestamp of
     // when we should show the frame
-    int pts = 0;
+    double pts = 0;
 
     int size = 0;
     uint8_t* data = nullptr;
@@ -100,9 +101,11 @@ public:
     int get_sample_rate() { return codec_context->sample_rate; }
     int get_channel_count() { return codec_context->ch_layout.nb_channels; }
 
+    void tick_clock(double pts);
+
     // Presentation timestamp of the previously decoded frame,
     // or the predicted presentation timestamp of the next frame
-    int clock;
+    double clock;
 
     // Number assigned to the particular audio or video stream
     int stream_index;
