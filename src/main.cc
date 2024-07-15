@@ -8,7 +8,7 @@ int main()
     SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS);
     SDL_Window* window = SDL_CreateWindow("Show Time!", SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED, default_width, default_height,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+        SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
     SDL_Event event;
     bool closed = false;
 

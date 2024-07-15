@@ -55,9 +55,14 @@ void Player::resize(int new_width, int new_height)
     frame_height = new_height;
     frame_width = r != -1 ? int(r * double(new_height)) : new_width;
 
+    // Center the frame texture
+    frame_position = (new_width - frame_width) / 2;
+
     // Do an initial window resize to match the video's aspect ratio
     if (!resized_to_aspect_ratio) {
         SDL_SetWindowSize(window_ref, frame_width, frame_height);
+        SDL_ShowWindow(window_ref);
+        frame_position = 0;
     }
 
     SDL_DestroyTexture(frame_texture);
@@ -159,7 +164,7 @@ void Player::render_frame(Frame& frame)
     memcpy(frame_pixels, frame.data, frame.size);
     SDL_UnlockTexture(frame_texture);
 
-    SDL_Rect rect = { 0, 0, frame_width, frame_height };
+    SDL_Rect rect = { frame_position, 0, frame_width, frame_height };
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, frame_texture, nullptr, &rect);
     SDL_RenderPresent(renderer);

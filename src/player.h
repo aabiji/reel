@@ -43,6 +43,7 @@ private:
     void* frame_pixels;
     int frame_width;
     int frame_height;
+    int frame_position;
     bool resized_to_aspect_ratio;
 
     SDL_AudioSpec wanted_spec;
