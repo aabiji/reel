@@ -18,20 +18,27 @@ class Queue {
 public:
     void put(T value)
     {
-        std::lock_guard<std::mutex> guard(mutex);
+        std::unique_lock<std::mutex> guard(mutex);
         queue.push(value);
     }
 
     T get()
     {
-        std::lock_guard<std::mutex> guard(mutex);
-        if (queue.empty()) {
+        std::unique_lock<std::mutex> guard(mutex);
+        if (queue.empty())
             return T();
-        }
 
         T front = queue.front();
         queue.pop();
         return front;
+    }
+
+    T peek()
+    {
+        std::unique_lock<std::mutex> guard(mutex);
+        if (queue.empty())
+            return T();
+        return queue.front();
     }
 
 private:

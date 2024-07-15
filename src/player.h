@@ -4,6 +4,7 @@
 #include <SDL2/SDL.h>
 
 const uint32_t REFRESH_EVENT = SDL_USEREVENT + 1;
+void sdl_audio_callback(void* opaque, uint8_t* stream, int length);
 
 class Player {
 public:
@@ -23,6 +24,9 @@ public:
 
     bool successful_init();
 
+    Decoder decoder;
+    int read_index;
+
 private:
     void render_frame(Frame& frame);
 
@@ -32,7 +36,6 @@ private:
 
     int last_frames_pts;
     int last_frames_delay;
-    Decoder decoder;
 
     SDL_Window* window_ref;
     SDL_Renderer* renderer;

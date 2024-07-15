@@ -17,8 +17,9 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
     wanted_spec.freq = decoder.audio.get_sample_rate();
     wanted_spec.channels = decoder.audio.get_channel_count();
     wanted_spec.format = AUDIO_S16SYS;
-    wanted_spec.callback = nullptr;
-    wanted_spec.userdata = nullptr;
+    wanted_spec.callback = sdl_audio_callback;
+    wanted_spec.userdata = this;
+    wanted_spec.silence = 0;
 
     SDL_AudioSpec received;
     device_id = SDL_OpenAudioDevice(nullptr, 0, &wanted_spec, &received, 0);
@@ -26,6 +27,7 @@ Player::Player(SDL_Window* window, const char* file, int width, int height)
 
     last_frames_pts = 0;
     last_frames_delay = 40e-3;
+    read_index = 0;
 }
 
 void Player::cleanup()
@@ -87,6 +89,8 @@ void Player::refresh()
     int delay = determine_delay(frame.pts);
     schedule_a_video_refresh(delay);
     render_frame(frame);
+
+    frame.cleanup();
 }
 
 // TODO: video delay is way too fast
@@ -154,6 +158,33 @@ void Player::render_frame(Frame& frame)
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, frame_texture, nullptr, &rect);
     SDL_RenderPresent(renderer);
+}
 
-    frame.cleanup();
+void sdl_audio_callback(void* opaque, uint8_t* stream, int remaining)
+{
+    Player* player = (Player*)opaque;
+
+    while (remaining > 0) {
+        // Get our current frame
+        Frame frame = player->decoder.audio.frame_queue.peek();
+        if (frame.data == nullptr) {
+            memset(stream, 0, remaining);
+            break;
+        }
+
+        // Fill the stream with data from our audio frame
+        int size = frame.size - player->read_index;
+        int clamped_size = size > remaining ? remaining : size;
+        memcpy(stream, frame.data + player->read_index, clamped_size);
+        stream += size;
+        remaining -= size;
+
+        // Keep reading from one frame until we've read all the data from it
+        player->read_index += size;
+        if (player->read_index >= frame.size) {
+            player->read_index = 0;
+            // Pop queue to get the next frame
+            player->decoder.audio.frame_queue.get();
+        }
+    }
 }
