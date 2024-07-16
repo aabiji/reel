@@ -44,18 +44,12 @@ solved the issue!
 - [Synchronizing audio and video](https://www.programmersought.com/article/21844834744/)
 
 TODO:
-- Call av_guess_sample_aspect_ratio() to determine initial window height and width
 - Ninja & mold for faster builds
-- Mutex to prevent data races when accessing the queues
 - Pre initializing the scalers
 - Synchronize audio and video
 - Use a profiler to optimise the code
 - See if there are hardware devices for decoding audio
 - Renderer (OpenGL?)
-- GPU accelerated video decoding (ffmpeg stuff) -- check
-- Sound playback -- check
-- Some way to sync sound and video
-- Do multiple things on different threads -- check
 - Basic UI (take a look at microui)
 - Subtitles using WhisperCpp???
 - Features
