@@ -1,4 +1,5 @@
 #include "player.h"
+#include "utils.h"
 
 Player::Player(SDL_Window* window, const char* file, int width, int height)
 {

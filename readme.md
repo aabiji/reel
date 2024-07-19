@@ -44,10 +44,13 @@ solved the issue!
 - [Synchronizing audio and video](https://www.programmersought.com/article/21844834744/)
 
 TODO:
-- Ninja & mold for faster builds
+- Fixed sized queue
+- Seek through video and audio streams
+- Refactor -- a lot of class fields should not be public
+  - Is there a better alternative to OOP?
 - Pre initializing the scalers
 - Synchronize audio and video
-- Use a profiler to optimise the code
+- Use valgrind to optimise the code
 - See if there are hardware devices for decoding audio
 - Renderer (OpenGL?)
 - Basic UI (take a look at microui)
