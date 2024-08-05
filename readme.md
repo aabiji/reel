@@ -10,16 +10,27 @@ sudo apt install ffmpeg libsdl2-dev libavdevice-dev
 
 git clone https://github.com/aabiji/showtime
 
-make run
+./run.sh
 ```
 
 ## How it works
 
 Multithreading:
-We have a video frame decoding thread, audio frame decoding thread, packet decoding thread and our main app thread that has our event loop. In the packet decoding thread, we put packets into their respective queues. In the video frame decoding thread, we decode video frames and queue them so that we can display them. In the audio frame decoding thread, we decode audio samples and use SDL to queue them to our speaker.
+We have a video frame decoding thread, audio frame decoding thread, packet decoding
+thread and our main app thread that has our event loop. In the packet decoding thread,
+we put packets into their respective queues. In the video frame decoding thread,
+we decode video frames and queue them so that we can display them. In the audio
+frame decoding thread, we decode audio samples and use SDL to queue them to our speaker.
 
 Synchronizing video and audio:
-So humans are more sensitive to changes in audio than we are to video, so we'll let the audio run normally, but we'll control the video playback. Instead of always having a fixed frame delay (fps), we can control the frame delay based on how far the video stream's timestamp is in reference to the audio stream's timestamp. If we're too far behind then we make the delay really small to try to catch up as fast as possible, if we're too far in front, we make the delay really big to slow down and let the audio catch up. Controlling the frame delay implies that we need to control how quickly SDL's event loop refreshes, and we can use SDL custom events for that.
+So humans are more sensitive to changes in audio than we are to video, so we'll
+let the audio run normally, but we'll control the video playback. Instead of always
+having a fixed frame delay (fps), we can control the frame delay based on how far
+the video stream's timestamp is in reference to the audio stream's timestamp. If
+we're too far behind then we make the delay really small to try to catch up as
+fast as possible, if we're too far in front, we make the delay really big to slow
+down and let the audio catch up. Controlling the frame delay implies that we need
+to control how quickly SDL's event loop refreshes, and we can use SDL custom events for that.
 
 Annoying opus bug:
 The warnings plagged me for quite a while:
@@ -44,16 +55,18 @@ solved the issue!
 - [Synchronizing audio and video](https://www.programmersought.com/article/21844834744/)
 
 TODO:
-- Fixed sized queue
-- Seek through video and audio streams
-- Refactor -- a lot of class fields should not be public
-  - Is there a better alternative to OOP?
-- Pre initializing the scalers
-- Synchronize audio and video
+- Seeking through video and audio stream (using bytes)
+- Refactor
+  - Fixed sized queue
+  - Pre initialize the swrcontext and swscontext
+  - Fix synchronization bugs
+  - Fix hardware decoding bugs
+  - Cleanup code
+
+- Frame dropping if we lag to far behind
 - Use valgrind to optimise the code
-- See if there are hardware devices for decoding audio
 - Renderer (OpenGL?)
-- Basic UI (take a look at microui)
+- Basic UI (take a look at microui or lvgl)
 - Subtitles using WhisperCpp???
 - Features
     - [] Play

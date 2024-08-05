@@ -1,4 +1,4 @@
-!#/bin/sh
+# !#/bin/sh
 
 # Generate ninja build files 
 if [ ! -d "bin" ]; then
