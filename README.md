@@ -1,6 +1,7 @@
-# Luz
+# 🎬 Reel
 
-A video player
+A video player. This is my attempt at understanding how video
+playback works.
 
 Points to focus on:
 - Rust FFI with ffmpeg C api
