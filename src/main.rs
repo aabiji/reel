@@ -5,19 +5,77 @@ use ffmpeg_next::frame;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::Packet;
 
-// Current architecture:
-// Main decoding thread that pushes packets to their respective queues
-// Video decoder runs on a sepearte thread, fetches and decodes packets
-// from the queue and pushes frames unto a queue.
-// Audio decoder does the same thing.
-// Is there a better way to structure a video player?
-// TODO: multi threaded decoding
-// TODO: fixed sized queue
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex};
+
+/// Fixed sized, thread safe queue
+struct FixedQueue<T> {
+    read_var: Condvar, // Notifies on data read
+    has_read: Mutex<bool>,
+
+    write_var: Condvar, // Notifies on data write
+    has_written: Mutex<bool>,
+
+    data: Mutex<VecDeque<T>>,
+    max_size: usize,
+}
+
+impl<T> FixedQueue<T> {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            read_var: Condvar::new(),
+            has_read: Mutex::new(false),
+            write_var: Condvar::new(),
+            has_written: Mutex::new(false),
+            data: Mutex::new(VecDeque::new()),
+            max_size,
+        }
+    }
+
+    pub fn read(&self) -> T {
+        // There always needs to be something for us to read,
+        // so we'll sleep until we've written to the queue
+        if self.data.lock().unwrap().len() == 0 {
+            let mut has_written = self.has_written.lock().unwrap();
+            while !*has_written {
+                has_written = self.write_var.wait(has_written).unwrap();
+            }
+            *has_written = false;
+        }
+
+        // Signal that we've read from the queue
+        let mut has_read = self.has_read.lock().unwrap();
+        *has_read = true;
+        self.read_var.notify_one();
+
+        let value = self.data.lock().unwrap().remove(0).unwrap();
+        value
+    }
+
+    pub fn write(&self, value: T) {
+        // We can't have more than `self.max_size` items, so we
+        // need to sleep until we've read from the queue
+        if self.data.lock().unwrap().len() >= self.max_size {
+            let mut has_read = self.has_read.lock().unwrap();
+            while !*has_read {
+                has_read = self.read_var.wait(has_read).unwrap();
+            }
+            *has_read = false;
+        }
+
+        self.data.lock().unwrap().push_back(value);
+
+        // Signal that we've written to the queue
+        let mut has_written = self.has_written.lock().unwrap();
+        *has_written = true;
+        self.write_var.notify_one();
+    }
+}
 
 struct VideoDecoder {
     stream_index: usize,
-    decoder: Video,
-    packet_queue: Vec<Packet>,
+    decoder: Mutex<Video>,
+    packet_queue: FixedQueue<Packet>,
 }
 
 impl VideoDecoder {
@@ -27,29 +85,45 @@ impl VideoDecoder {
         let decoder = codec_context.decoder().video().unwrap();
         Self {
             stream_index: media.index(),
-            packet_queue: Vec::new(),
-            decoder,
+            packet_queue: FixedQueue::new(25),
+            decoder: Mutex::new(decoder),
         }
     }
 
-    fn push_packet_queue(&mut self, packet: Packet) {
-        self.packet_queue.push(packet);
-
-        //println!("{}", self.packet_queue.len());
-    }
-
-    fn decode(&mut self) {
+    fn decode(&self) {
         loop {
-            let value = self.packet_queue.pop(); // pop sounds dodgy -- we should be reading from the front
-            if let Some(packet) = value {
-                self.decoder.send_packet(&packet).unwrap();
-
-                let mut frame = frame::Video::empty();
-                while self.decoder.receive_frame(&mut frame).is_ok() {
-                    println!("Video frame: {}x{}", frame.width(), frame.height());
+            let packet = self.packet_queue.read();
+            unsafe {
+                // An empty packet signifies the end of the stream
+                if packet.is_empty() && packet.duration() == -1 {
+                    self.flush_decoder();
+                    break;
                 }
             }
+
+            self.decoder.lock().unwrap().send_packet(&packet).unwrap();
+
+            let mut frame = frame::Video::empty();
+            while self
+                .decoder
+                .lock()
+                .unwrap()
+                .receive_frame(&mut frame)
+                .is_ok()
+            {}
         }
+    }
+
+    fn flush_decoder(&self) {
+        self.decoder.lock().unwrap().send_eof().unwrap();
+        let mut frame = frame::Video::empty();
+        while self
+            .decoder
+            .lock()
+            .unwrap()
+            .receive_frame(&mut frame)
+            .is_ok()
+        {}
     }
 }
 
@@ -58,13 +132,31 @@ fn main() {
 
     let path = "/home/aabiji/Videos/sync-test.mp4";
     let mut format_context = ffmpeg_next::format::input(path).unwrap();
-    let mut video_decoder = VideoDecoder::new(&format_context);
+    let video_decoder = Arc::new(VideoDecoder::new(&format_context));
 
-    for (stream, packet) in format_context.packets() {
-        if stream.index() == video_decoder.stream_index {
-            video_decoder.push_packet_queue(packet);
-        }
-    }
+    let video_decoding_thread = {
+        let decoder = Arc::clone(&video_decoder);
+        std::thread::spawn(move || {
+            decoder.decode();
+        })
+    };
 
-    println!("{path}");
+    let decoder_thread = {
+        std::thread::spawn(move || {
+            let mut end_packet = Packet::empty();
+            end_packet.set_duration(-1);
+
+            for (stream, packet) in format_context.packets() {
+                if stream.index() == video_decoder.stream_index {
+                    video_decoder.packet_queue.write(packet);
+                }
+            }
+
+            // Write end of stream packets
+            video_decoder.packet_queue.write(end_packet);
+        })
+    };
+
+    video_decoding_thread.join().unwrap();
+    decoder_thread.join().unwrap();
 }
