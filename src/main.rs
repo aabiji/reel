@@ -7,6 +7,11 @@ use ffmpeg_next::Packet;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+
+use sdl2::event::Event;
+use sdl2::pixels::Color;
+use std::time::Duration;
 
 /// Fixed sized, thread safe queue
 struct FixedQueue<T> {
@@ -128,6 +133,7 @@ impl VideoDecoder {
 }
 
 fn main() {
+    /*
     ffmpeg_next::init().unwrap();
 
     let path = "/home/aabiji/Videos/sync-test.mp4";
@@ -159,4 +165,35 @@ fn main() {
 
     video_decoding_thread.join().unwrap();
     decoder_thread.join().unwrap();
+     */
+
+    let sdl_context = sdl2::init().unwrap();
+    let video_subsystem = sdl_context.video().unwrap();
+
+    let width = 800;
+    let height = 600;
+    let window = video_subsystem
+        .window("Reel", width, height)
+        .position_centered()
+        .opengl()
+        .build()
+        .unwrap();
+
+    let mut canvas = window.into_canvas().accelerated().build().unwrap();
+
+    let fps = Duration::new(0, 1000000000u32 / 60);
+    let mut event_pump = sdl_context.event_pump().unwrap();
+    'running: loop {
+        for event in event_pump.poll_iter() {
+            match event {
+                Event::Quit { .. } => break 'running,
+                _ => {}
+            }
+        }
+
+        canvas.clear();
+        canvas.set_draw_color(Color::RGB(255, 255, 255));
+        canvas.present();
+        std::thread::sleep(fps);
+    }
 }
