@@ -1,15 +1,19 @@
-use ffmpeg_next::codec::context::Context;
+use ffmpeg_next::codec::context::Context as CodecContext;
 use ffmpeg_next::decoder::video::Video;
 use ffmpeg_next::format::context::Input;
+use ffmpeg_next::format::Pixel;
 use ffmpeg_next::frame::Video as VideoFrame;
 use ffmpeg_next::media::Type;
+use ffmpeg_next::software::scaling::Context as ScalingContext;
+use ffmpeg_next::software::scaling::Flags as ScalingFlags;
 use ffmpeg_next::Packet;
+
+use sdl2::event::Event;
+use sdl2::pixels::PixelFormatEnum;
+use sdl2::rect::Rect;
 
 use std::collections::VecDeque;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
-
-use sdl2::event::Event;
-use sdl2::pixels::Color;
 use std::time::Duration;
 
 // A receiver that will receive a message on a channel,
@@ -100,7 +104,7 @@ struct VideoDecoder {
 impl VideoDecoder {
     pub fn new(context: &Input) -> Self {
         let media = context.streams().best(Type::Video).unwrap();
-        let codec_context = Context::from_parameters(media.parameters()).unwrap();
+        let codec_context = CodecContext::from_parameters(media.parameters()).unwrap();
         let decoder = codec_context.decoder().video().unwrap();
         Self {
             stream_index: media.index(),
@@ -110,7 +114,7 @@ impl VideoDecoder {
         }
     }
 
-    fn flush(&self) {
+    pub fn flush(&self) {
         self.decoder.lock().unwrap().send_eof().unwrap();
         let mut frame = VideoFrame::empty();
         while self
@@ -123,10 +127,21 @@ impl VideoDecoder {
     }
 
     pub fn decode(&self, receiver: StopReceiver) {
+        let mut decoder = self.decoder.lock().unwrap();
+        let mut scaler = ScalingContext::get(
+            decoder.format(),
+            decoder.width(),
+            decoder.height(),
+            Pixel::RGB24,
+            800,
+            600,
+            ScalingFlags::BILINEAR,
+        )
+        .unwrap();
+
         loop {
             // Stop when we receive something on the channel
             if receiver.lock().unwrap().try_recv().is_ok() {
-                self.flush();
                 break;
             }
 
@@ -135,21 +150,12 @@ impl VideoDecoder {
                 continue;
             }
 
-            self.decoder
-                .lock()
-                .unwrap()
-                .send_packet(&packet.unwrap())
-                .unwrap();
-
-            let mut frame = VideoFrame::empty();
-            while self
-                .decoder
-                .lock()
-                .unwrap()
-                .receive_frame(&mut frame)
-                .is_ok()
-            {
-                self.frame_queue.write(frame.clone());
+            let mut decoded_frame = VideoFrame::empty();
+            decoder.send_packet(&packet.unwrap()).unwrap();
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
+                let mut rgb_frame = VideoFrame::empty();
+                scaler.run(&decoded_frame, &mut rgb_frame).unwrap();
+                self.frame_queue.write(rgb_frame);
             }
         }
     }
@@ -174,6 +180,7 @@ fn main() {
         let receiver = Arc::clone(&stop_receiver);
         std::thread::spawn(move || {
             vdecoder.decode(receiver);
+            vdecoder.flush();
         })
     };
 
@@ -208,6 +215,12 @@ fn main() {
         .unwrap();
     let mut canvas = window.into_canvas().accelerated().build().unwrap();
 
+    let texture_creator = canvas.texture_creator();
+    let mut frame_texture = texture_creator
+        .create_texture_streaming(PixelFormatEnum::RGB24, width, height)
+        .unwrap();
+    let position = Rect::new(0, 0, width, height);
+
     let fps = Duration::new(0, 1000000000u32 / 60);
     let mut event_pump = sdl_context.event_pump().unwrap();
     'running: loop {
@@ -225,13 +238,17 @@ fn main() {
         }
 
         canvas.clear();
-        canvas.set_draw_color(Color::RGB(255, 255, 255));
-
         if let Some(frame) = video_decoder.frame_queue.read() {
-            println!("Video frame ({}x{})", frame.width(), frame.height());
+            // Write the frame pixels to the frame texture
+            frame_texture
+                .with_lock(None, |buffer: &mut [u8], _pitch: usize| {
+                    buffer.clone_from_slice(frame.data(0));
+                })
+                .unwrap();
         }
-
+        canvas.copy(&frame_texture, None, Some(position)).unwrap();
         canvas.present();
+
         std::thread::sleep(fps);
     }
 
